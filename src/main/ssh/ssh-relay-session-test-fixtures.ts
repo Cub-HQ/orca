@@ -24,6 +24,7 @@ export function createMockDeps(): SshRelaySessionTestDeps {
     markSshRemotePtyLease: vi.fn(),
     markSshRemotePtyLeases: vi.fn(),
     markSshRemotePtyLeasesAsync: vi.fn(),
+    markSshRemotePtyLeasesForShutdown: vi.fn(),
     markSshRemotePtyLeasesAttachedAsync: vi.fn(),
     persistPtyBinding: vi.fn()
   } as unknown as Store

@@ -523,6 +523,45 @@ describe('SshRelaySession consumer recovery durability', () => {
     expect(mockStore.upsertSshPtyConsumerRecovery).not.toHaveBeenCalled()
   })
 
+  it('detaches for shutdown in memory without a per-session durable write', async () => {
+    const targetId = 'target-shutdown-detach'
+    const { mockConn, mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    const session = new SshRelaySession(targetId, getMainWindow, mockStore, mockPortForward)
+    await session.establish(mockConn)
+    vi.mocked(mockStore.markSshRemotePtyLeasesAsync).mockClear()
+
+    session.beginShutdownDetach()
+    session.beginShutdownDetach()
+
+    // Why in-memory only: the committed quit path runs the final store flush immediately after this,
+    // and a durable write here would race that flush rather than be captured by it.
+    expect(mockStore.markSshRemotePtyLeasesForShutdown).toHaveBeenCalledExactlyOnceWith(
+      targetId,
+      'detached'
+    )
+    expect(mockStore.markSshRemotePtyLeasesAsync).not.toHaveBeenCalled()
+    // Why the recovery record survives: 'detached' means this app let go, not that the remote shell
+    // died — the identity is what lets the next launch reattach those still-running PTYs.
+    expect(mockStore.removeSshPtyConsumerRecovery).not.toHaveBeenCalled()
+    expect(getSshPtyConsumerRecovery(targetId)?.detached).toBe(true)
+    expect(getSshPtyConsumerRecovery(targetId)?.clientInstanceId).toBeTypeOf('string')
+  })
+
+  it('keeps ordinary detach durability reporting unchanged after a shutdown detach exists', async () => {
+    const targetId = 'target-shutdown-vs-ordinary-detach'
+    const { mockConn, mockStore, mockPortForward, getMainWindow } = createMockDeps()
+    vi.mocked(mockStore.markSshRemotePtyLeasesAsync).mockRejectedValueOnce(
+      new Error('lease write failed')
+    )
+    const session = new SshRelaySession(targetId, getMainWindow, mockStore, mockPortForward)
+    await session.establish(mockConn)
+
+    // Why still rejecting: only the shutdown path delegates durability; an ordinary detach must keep
+    // surfacing a failed write to its caller.
+    await expect(session.detachAndPersist()).rejects.toThrow('lease write failed')
+    expect(mockStore.markSshRemotePtyLeasesForShutdown).not.toHaveBeenCalled()
+  })
+
   it('upgrades a pending detach to a full disposal', async () => {
     const targetId = 'target-teardown-upgrade'
     const { mockConn, mockStore, mockPortForward, getMainWindow } = createMockDeps()

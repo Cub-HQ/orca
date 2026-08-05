@@ -816,6 +816,28 @@ export class SshRelaySession {
     }
   }
 
+  // Why a separate transition from detachAndPersist: on the committed quit path every in-memory
+  // change has to land before the final store flush snapshots, and that flush — not a per-session
+  // durable write — is what persists it. Idempotent, and it schedules no persistence of its own, so
+  // nothing the async drain finishes later can write recovery state after the snapshot.
+  //
+  // 'detached' says this app let go of the lease, not that the remote shell died. The remote PTYs are
+  // left running for the next attach, exactly as an ordinary detach leaves them.
+  beginShutdownDetach(): void {
+    if (this.detachedInMemory || this._state === 'disposed') {
+      return
+    }
+    detachSshPtyConsumerRecovery(this.targetId, this.ptyConsumerClientInstanceId)
+    this.abortController?.abort()
+    this.stopPortScanning()
+    this.broadcastEmptyLists()
+    this.teardownProviders('connection_lost')
+    this.currentConnection = null
+    this._state = 'disposed'
+    this.detachedInMemory = true
+    this.store.markSshRemotePtyLeasesForShutdown(this.targetId, 'detached')
+  }
+
   private runDetach(): Promise<void> {
     if (!this.detachedInMemory) {
       if (this._state === 'disposed') {
