@@ -174,6 +174,7 @@ jobs:
           You are DF_Reviewer. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Reviewer.md and follow it, with these overrides:
           - Review PR #$PR on $R in this fresh checkout of its head. Independent pass: diff via REST (gh api), verify the linked issue's Done-when is actually met, re-run the gates YOURSELF: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering your changed paths (vitest run <changed test files>). Verify the new tests are real guards (would fail without the fix). Verify the PR merges (mergeable via gh api).
           - Never edit code. Post ONE evidence comment on PR #$PR starting with '## DF_Reviewer': what you executed, real output, findings with P-levels. It MUST contain HEAD_SHA=<full sha reviewed> and its LAST line must be exactly DF_REVIEW=approve or DF_REVIEW=block.
+          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: first what it proves in plain words, then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
           - End your comment with a section '**Hand-off package (exactly what the next stage gets)**': on approve: 3 bullets for QA - What changed (user-visible), Attack ideas (weak spots you noticed but did not block on), Commands to reach the change. On block: numbered P1 findings - that package goes to the Rework builder. Passed via this comment on PR #$PR.
           - Every GitHub read/write MUST use gh api (REST). The gh pr / gh issue subcommands are BANNED: GraphQL quota is exhausted and they fail.
           - Voice rule: Josh reads this and he is not a programmer. Write your whole comment so a smart 10-year-old gets it: short sentences, plain words, and any technical word gets a one-phrase explanation right there. Say what you did, what you found, and what happens next. Keep the machine lines exact and untouched (INTAKE=, DF_PR=, HEAD_SHA=, DF_REWORK=, DF_REVIEW=, DF_QA=).
@@ -191,6 +192,16 @@ jobs:
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Tests & results"
+        if: always()
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body')
+          T=$(printf '%s\n' "$B" | awk '/^### Tests I ran/{f=1} f && /^### / && !/^### Tests I ran/{exit} f')
+          if [ -n "$T" ]; then printf '%s\n' "$T"; printf '%s\n\n' "$T" >> "$GITHUB_STEP_SUMMARY"; else echo "no '### Tests I ran' section found in review comment"; fi
       - name: "Hand-off → Rework / QA"
         id: v
         env:
@@ -306,6 +317,7 @@ jobs:
           - PR #$PR on $R, fresh checkout of current head. prior-review.md is the blocking review: verify each P1 is actually fixed by the new commits; do not re-audit cleared paths unless the rework touched them.
           - Re-run gates YOURSELF: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering your changed paths (vitest run <changed test files>). Verify mergeable.
           - Never edit code. Post ONE evidence comment on PR #$PR starting with '## DF_Reviewer', containing HEAD_SHA=<full sha reviewed>, LAST line exactly DF_REVIEW=approve or DF_REVIEW=block.
+          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: first what it proves in plain words, then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
           - End your comment with a section '**Hand-off package (exactly what the next stage gets)**': on approve: 3 bullets for QA - What changed (user-visible), Attack ideas (weak spots), Commands to reach the change. On block: numbered P1 findings for Josh (strike cap reached). Passed via this comment on PR #$PR.
           - Every GitHub read/write MUST use gh api (REST). The gh pr / gh issue subcommands are BANNED: GraphQL quota is exhausted and they fail.
           - Voice rule: Josh reads this and he is not a programmer. Write your whole comment so a smart 10-year-old gets it: short sentences, plain words, and any technical word gets a one-phrase explanation right there. Say what you did, what you found, and what happens next. Keep the machine lines exact and untouched (INTAKE=, DF_PR=, HEAD_SHA=, DF_REWORK=, DF_REVIEW=, DF_QA=).
@@ -323,6 +335,16 @@ jobs:
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Tests & results"
+        if: always()
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body')
+          T=$(printf '%s\n' "$B" | awk '/^### Tests I ran/{f=1} f && /^### / && !/^### Tests I ran/{exit} f')
+          if [ -n "$T" ]; then printf '%s\n' "$T"; printf '%s\n\n' "$T" >> "$GITHUB_STEP_SUMMARY"; else echo "no '### Tests I ran' section found in review comment"; fi
       - name: "Hand-off → QA / Josh"
         id: v
         env:
