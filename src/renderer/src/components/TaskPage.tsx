@@ -284,6 +284,11 @@ import {
   isTaskPageGitHubDraftPR
 } from '@/components/task-page-github-work-item-status'
 import {
+  formatTaskPageFactoryStageElapsed,
+  getTaskPageFactoryStageLabel
+} from '@/components/task-page-github-factory-stage'
+import { useNow } from '@/components/dashboard/useNow'
+import {
   buildTaskPageGitHubCloseUpdate,
   getTaskPageGitHubDuplicateCandidates,
   getTaskPageGitHubDuplicateTargetErrorMessage,
@@ -603,6 +608,23 @@ function scopeGitHubTaskSearch(query: string, kind: GitHubTaskKind): string {
 
 function formatRelativeTime(input: string): string {
   return formatUiRelativeTimeFromDate(input)
+}
+
+function GitHubFactoryStageChip({
+  stage,
+  enteredAt
+}: {
+  stage: NonNullable<GitHubWorkItem['factoryStage']>
+  enteredAt?: string
+}): React.JSX.Element {
+  const now = useNow(30_000)
+  const elapsed = enteredAt ? formatTaskPageFactoryStageElapsed(enteredAt, now) : null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/50 bg-muted/40 px-1.5 py-0 text-[10px] font-medium text-foreground">
+      <span>{getTaskPageFactoryStageLabel(stage)}</span>
+      {elapsed ? <span className="text-muted-foreground">{elapsed}</span> : null}
+    </span>
+  )
 }
 
 type LinearProjectTab = 'overview' | 'issues'
@@ -9665,6 +9687,12 @@ export default function TaskPage(): React.JSX.Element {
                                 <TaskPageGitHubWorkItemStateBadge
                                   item={item}
                                   className="shrink-0 px-1.5 py-0"
+                                />
+                              ) : null}
+                              {item.type === 'issue' && item.factoryStage ? (
+                                <GitHubFactoryStageChip
+                                  stage={item.factoryStage}
+                                  enteredAt={item.factoryStageEnteredAt}
                                 />
                               ) : null}
                               {selectedRepos.length > 1 && itemRepo ? (

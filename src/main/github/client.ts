@@ -120,6 +120,7 @@ import {
 } from './rate-limit'
 
 type GhExecOptions = GitHubRepoExecOptions
+
 type HostedReviewLocalGitOptions = ReturnType<typeof getHostedReviewLocalGitOptions>
 
 const ORCA_REPO = 'stablyai/orca'
@@ -508,6 +509,95 @@ const WORK_ITEM_PR_LIST_JSON_FIELDS =
 // Requested reviewers stay in the list payload because Tasks renders that column on first paint.
 const WORK_ITEM_PR_DETAIL_JSON_FIELDS =
   'number,title,state,url,labels,updatedAt,author,isDraft,headRefName,baseRefName,headRefOid,headRepositoryOwner,additions,deletions,changedFiles,reviewDecision,reviewRequests,latestReviews,assignees,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,maintainerCanModify'
+const FACTORY_STAGES: Record<NonNullable<GitHubWorkItem['factoryStage']>, true> = {
+  building: true,
+  'pr-open': true,
+  reviewed: true,
+  'awaiting-review': true,
+  blocked: true,
+  merged: true,
+  deployed: true
+}
+
+function getFactoryStage(labels: readonly string[]): GitHubWorkItem['factoryStage'] {
+  for (const label of labels) {
+    if (!label.startsWith('factory:')) {
+      continue
+    }
+    const stage = label.slice('factory:'.length) as NonNullable<GitHubWorkItem['factoryStage']>
+    if (stage in FACTORY_STAGES) {
+      return stage
+    }
+  }
+  return undefined
+}
+
+function parseFactoryStageEnteredAt(stdout: string, activeLabel: string): string | undefined {
+  let latest: string | undefined
+  for (const line of stdout.split('\n')) {
+    try {
+      const event = JSON.parse(line) as { created_at?: unknown; label?: { name?: unknown } }
+      if (event.label?.name !== activeLabel || typeof event.created_at !== 'string') {
+        continue
+      }
+      if (!latest || event.created_at > latest) {
+        latest = event.created_at
+      }
+    } catch {
+      // Timeline metadata is decorative; ignore malformed event lines.
+    }
+  }
+  return latest
+}
+
+async function enrichFactoryStages(
+  items: MainWorkItem[],
+  ownerRepo: OwnerRepo,
+  ghOptions: GhExecOptions
+): Promise<MainWorkItem[]> {
+  const issueRows = items.filter(
+    (item) => item.type === 'issue' && getFactoryStage(item.labels) !== undefined
+  )
+  if (issueRows.length === 0) {
+    return items
+  }
+  const enriched = new Map<number, MainWorkItem>()
+  await Promise.all(
+    issueRows.map(async (item) => {
+      const factoryStage = getFactoryStage(item.labels)
+      if (!factoryStage) {
+        return
+      }
+      if (repositoryRateLimitGuard(ownerRepo, 'core', ghOptions).blocked) {
+        enriched.set(item.number, { ...item, factoryStage })
+        return
+      }
+      noteRepositoryRateLimitSpend(ownerRepo, 'core', 1, ghOptions)
+      try {
+        const { stdout } = await ghExecFileAsync(
+          [
+            'api',
+            '--cache',
+            '120s',
+            `repos/${ownerRepo.owner}/${ownerRepo.repo}/issues/${item.number}/events?per_page=100`,
+            '--paginate',
+            '--jq',
+            '.[] | select(.event == "labeled") | @json'
+          ],
+          { ...ghOptions, ...githubHostExecOptions(ownerRepo) }
+        )
+        enriched.set(item.number, {
+          ...item,
+          factoryStage,
+          factoryStageEnteredAt: parseFactoryStageEnteredAt(stdout, `factory:${factoryStage}`)
+        })
+      } catch {
+        enriched.set(item.number, { ...item, factoryStage })
+      }
+    })
+  )
+  return items.map((item) => enriched.get(item.number) ?? item)
+}
 
 function mapIssueWorkItem(item: Record<string, unknown>): MainWorkItem {
   return {
@@ -1219,10 +1309,13 @@ async function listRecentWorkItems(
   let issues: MainWorkItem[] = []
   let issuesError: ClassifiedError | undefined
   if (issuesSettled.status === 'fulfilled') {
-    issues = (JSON.parse(issuesSettled.value.stdout) as Record<string, unknown>[])
+    const mappedIssues = (JSON.parse(issuesSettled.value.stdout) as Record<string, unknown>[])
       // Why: search/issues can still return PRs (pull_request marker) even with is:issue; filter them out.
       .filter((item) => !('pull_request' in item))
       .map(mapIssueWorkItem)
+    issues = issueOwnerRepo
+      ? await enrichFactoryStages(mappedIssues, issueOwnerRepo, ghOptions)
+      : mappedIssues
   } else {
     const stderr =
       issuesSettled.reason instanceof Error
@@ -1303,9 +1396,10 @@ async function listQueriedWorkItems(
         ...ghOptions,
         ...githubHostExecOptions(issueOwnerRepo)
       })
-      const items = (JSON.parse(stdout) as Record<string, unknown>[])
+      const mappedItems = (JSON.parse(stdout) as Record<string, unknown>[])
         .filter((item) => !('pull_request' in item))
         .map(mapIssueWorkItem)
+      const items = await enrichFactoryStages(mappedItems, issueOwnerRepo, ghOptions)
       successfulRequestCount += 1
       return { items }
     } catch (err) {
