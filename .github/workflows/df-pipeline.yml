@@ -543,7 +543,7 @@ jobs:
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
           T=$(gh api "repos/$R/issues/$ISSUE" --jq .title)
-          BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""' | awk 'NF==0 && p {exit} {print; p=1}' | head -c 600)
+          BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""' | awk 'NF==0 && n>400 {exit} {print; n+=length($0)}' | head -c 2000)
           QAB=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body' 2>/dev/null || true)
           TRY=$(printf '%s\n' "$QAB" | awk '/^### Try it yourself/{f=1} f && /^### / && !/^### Try it yourself/{exit} f && !/^\*\*Hand-off/{print}')
           TABLE=$(for S in "$STI" "$STB" "$STR1" "$STRW" "$STR2" "$STQ"; do if [ -n "$S" ]; then printf '%s\n' "$S"; fi; done | awk -F'|' '
