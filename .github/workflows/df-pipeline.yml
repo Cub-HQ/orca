@@ -54,9 +54,12 @@ jobs:
           R: ${{ github.repository }}
         run: |
           B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body')
-          printf '%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
-          printf '_Passed to Build as: the ## DF_Intake comment on issue #%s (the builder reads the issue + comments)._\n\n' "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
+          printf '### Hand-off → Build\n\n%s\n\n_Passed to Build as: the ## DF_Intake comment on issue #%s (the builder reads the issue + comments)._\n\n' "$B" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
+          echo "##[group]Hand-off sent → Build"
+          echo "##[group]Hand-off sent → next stage"
           printf '%s\n' "$B"
+          echo "##[endgroup]"
+          echo "##[endgroup]"
           L=$(printf '%s\n' "$B" | tail -1)
           case "$L" in
             INTAKE=go) G=go ;;
