@@ -95,6 +95,14 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       pr: ${{ steps.pr.outputs.pr }}
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:building" >/dev/null 2>&1 || true
       - name: "Received ← Intake"
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -163,6 +171,14 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:pr-open" >/dev/null 2>&1 || true
       - name: "Received ← Build"
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -246,6 +262,14 @@ jobs:
     outputs:
       stats: ${{ steps.gi.outputs.stats }}
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:building" >/dev/null 2>&1 || true
       - name: "Received ← Review"
         env:
           PR: ${{ needs.build.outputs.pr }}
@@ -314,6 +338,14 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:pr-open" >/dev/null 2>&1 || true
       - name: "Received ← Review + Rework"
         env:
           PR: ${{ needs.build.outputs.pr }}
@@ -399,6 +431,14 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       qa: ${{ steps.v.outputs.qa }}
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:reviewed" >/dev/null 2>&1 || true
       - name: "Received ← Review"
         env:
           PR: ${{ needs.build.outputs.pr }}
@@ -471,6 +511,14 @@ jobs:
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:
+      - name: Stage label
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:merged" >/dev/null 2>&1 || true
       - name: Merge and close
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -567,6 +615,14 @@ jobs:
           elif [ "$V1" = "block" ] && [ "$V2" != "approve" ]; then OUT="Not shipped: the reviewer said no twice (PR #$PR). The newest DF_Reviewer comment on the PR lists what is still wrong."
           elif [ -z "$PR" ]; then OUT="Not shipped: the build stage never produced a fix. Click the Build box above to see where it stopped."
           else OUT="Not shipped: the fix (PR #$PR) got approved but the tail end did not finish (qa=$QA, merge=$SHIP). It is parked on the issue for you."
+          fi
+          if [ "$GO" = "needs-info" ]; then FL="blocked"
+          elif [ "$SHIP" = "success" ]; then FL=""
+          else FL="blocked"
+          fi
+          if [ -n "$FL" ]; then
+            for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
+            gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:$FL" >/dev/null 2>&1 || true
           fi
           {
             echo "# For Josh: the whole story in one place"
