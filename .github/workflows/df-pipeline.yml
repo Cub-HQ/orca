@@ -30,6 +30,7 @@ jobs:
           BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""')
           printf '# What we are fixing\n\n**Issue #%s: %s**\n\n%s\n\n[Open the issue](https://github.com/%s/issues/%s)\n\n---\n\n' "$ISSUE" "$T" "$BODY" "$R" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
           printf 'Issue #%s: %s\n' "$ISSUE" "$T"
+          gh api -X POST "repos/$R/issues/$ISSUE/comments" -f body="🏭 Factory started on this. Watch it live: https://github.com/$R/actions/runs/$GITHUB_RUN_ID (the Summary tab ends with a 'For Josh' wrap-up when it finishes)." >/dev/null
       - name: Enough to build?
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
