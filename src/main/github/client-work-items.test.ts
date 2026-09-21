@@ -336,6 +336,78 @@ describe('listWorkItems', () => {
     ])
   })
 
+  it('adds the active factory stage and its latest label time to issue rows', async () => {
+    getIssueOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 12,
+            title: 'Build the thing',
+            state: 'open',
+            html_url: 'https://github.com/acme/widgets/issues/12',
+            labels: [{ name: 'factory:building' }],
+            updated_at: '2026-09-21T09:00:00Z',
+            user: { login: 'octocat' }
+          }
+        ])
+      })
+      .mockResolvedValueOnce({
+        stdout: [
+          JSON.stringify({ event: 'labeled', created_at: '2026-09-21T08:00:00Z', label: { name: 'factory:building' } }),
+          JSON.stringify({ event: 'labeled', created_at: '2026-09-21T10:30:00Z', label: { name: 'factory:building' } })
+        ].join('\n')
+      })
+      .mockResolvedValueOnce({ stdout: '[]' })
+
+    const { items } = await listWorkItems('/repo-root', 10, 'is:issue')
+
+    expect(items[0]).toMatchObject({
+      factoryStage: 'building',
+      factoryStageEnteredAt: '2026-09-21T10:30:00Z'
+    })
+    expect(ghExecFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      [
+        'api',
+        '--cache',
+        '120s',
+        'repos/acme/widgets/issues/12/events?per_page=100',
+        '--paginate',
+        '--jq',
+        '.[] | select(.event == "labeled") | @json'
+      ],
+      { cwd: '/repo-root' }
+    )
+  })
+
+  it('leaves issues without factory labels unchanged', async () => {
+    getIssueOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 12,
+            title: 'Normal issue',
+            state: 'open',
+            html_url: 'https://github.com/acme/widgets/issues/12',
+            labels: [{ name: 'bug' }],
+            updated_at: '2026-09-21T09:00:00Z',
+            user: { login: 'octocat' }
+          }
+        ])
+      })
+      .mockResolvedValueOnce({ stdout: '[]' })
+
+    const { items } = await listWorkItems('/repo-root', 10, 'is:issue')
+
+    expect(items[0]).not.toHaveProperty('factoryStage')
+    expect(items[0]).not.toHaveProperty('factoryStageEnteredAt')
+    expect(ghExecFileAsyncMock).toHaveBeenCalledTimes(1)
+  })
+
   it('routes local WSL work-item listing through repo resolution and gh execution options', async () => {
     const localGitOptions = { wslDistro: 'Ubuntu' }
     resolveIssueSourceMock.mockResolvedValue({

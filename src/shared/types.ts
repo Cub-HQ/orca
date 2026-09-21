@@ -1590,6 +1590,17 @@ export type GitHubWorkItem = {
   url: string
   labels: string[]
   updatedAt: string
+  /** Current Dark Factory stage, derived from the issue's active factory label. */
+  factoryStage?:
+    | 'building'
+    | 'pr-open'
+    | 'reviewed'
+    | 'awaiting-review'
+    | 'blocked'
+    | 'merged'
+    | 'deployed'
+  /** Timestamp of the latest event that applied the current factory label. */
+  factoryStageEnteredAt?: string
   author: string | null
   // Why: GHE user logins don't exist on github.com, so the github.com/{login}.png
   // fallback 404s. Carry the API-provided avatar_url so github.com + Enterprise
