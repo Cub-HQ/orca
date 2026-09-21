@@ -211,7 +211,7 @@ jobs:
           You are DF_Reviewer. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Reviewer.md and follow it, with these overrides:
           - Review PR #$PR on $R in this fresh checkout of its head. Independent pass: diff via REST (gh api), verify the linked issue's Done-when is actually met, re-run the gates YOURSELF: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering your changed paths (vitest run <changed test files>). Verify the new tests are real guards (would fail without the fix). Verify the PR merges (mergeable via gh api).
           - Never edit code. Post ONE evidence comment on PR #$PR starting with '## DF_Reviewer': what you executed, real output, findings with P-levels. It MUST contain HEAD_SHA=<full sha reviewed> and its LAST line must be exactly DF_REVIEW=approve or DF_REVIEW=block.
-          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: first what it proves in plain words, then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
+          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: start with WHAT the check looks for and what would go wrong for the user if it failed, in plain words - e.g. 'Looks for type mistakes - code handing a word to something that expects a number - which crash the app while it runs' - then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
           - End your comment with a section '**Hand-off package (exactly what the next stage gets)**': on approve: 3 bullets for QA - What changed (user-visible), Attack ideas (weak spots you noticed but did not block on), Commands to reach the change. On block: numbered P1 findings - that package goes to the Rework builder. Passed via this comment on PR #$PR.
           - Every GitHub read/write MUST use gh api (REST). The gh pr / gh issue subcommands are BANNED: GraphQL quota is exhausted and they fail.
           - Voice rule: Josh reads this and he is not a programmer. Write your whole comment so a smart 10-year-old gets it: short sentences, plain words, and any technical word gets a one-phrase explanation right there. Say what you did, what you found, and what happens next. Keep the machine lines exact and untouched (INTAKE=, DF_PR=, HEAD_SHA=, DF_REWORK=, DF_REVIEW=, DF_QA=).
@@ -379,7 +379,7 @@ jobs:
           - PR #$PR on $R, fresh checkout of current head. prior-review.md is the blocking review: verify each P1 is actually fixed by the new commits; do not re-audit cleared paths unless the rework touched them.
           - Re-run gates YOURSELF: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering your changed paths (vitest run <changed test files>). Verify mergeable.
           - Never edit code. Post ONE evidence comment on PR #$PR starting with '## DF_Reviewer', containing HEAD_SHA=<full sha reviewed>, LAST line exactly DF_REVIEW=approve or DF_REVIEW=block.
-          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: first what it proves in plain words, then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
+          - Structure the body of your comment with these exact markdown headers, in this order: '### What I checked and why' (plain English: each thing you examined and the reason it mattered), '### Tests I ran' (one line per gate or test command: start with WHAT the check looks for and what would go wrong for the user if it failed, in plain words - e.g. 'Looks for type mistakes - code handing a word to something that expects a number - which crash the app while it runs' - then **PASS** or **FAIL**, then the exact command and its key output line indented under it as evidence), '### Findings' (numbered, with P-levels; 'none' if clean). Plain English first on every line; the dev detail sits under it for the next AI stage.
           - End your comment with a section '**Hand-off package (exactly what the next stage gets)**': on approve: 3 bullets for QA - What changed (user-visible), Attack ideas (weak spots), Commands to reach the change. On block: numbered P1 findings for Josh (strike cap reached). Passed via this comment on PR #$PR.
           - Every GitHub read/write MUST use gh api (REST). The gh pr / gh issue subcommands are BANNED: GraphQL quota is exhausted and they fail.
           - Voice rule: Josh reads this and he is not a programmer. Write your whole comment so a smart 10-year-old gets it: short sentences, plain words, and any technical word gets a one-phrase explanation right there. Say what you did, what you found, and what happens next. Keep the machine lines exact and untouched (INTAKE=, DF_PR=, HEAD_SHA=, DF_REWORK=, DF_REVIEW=, DF_QA=).
@@ -611,6 +611,9 @@ jobs:
               printf("- All models together: %s tokens\n", commas(tt))
               print ""
               printf("Time: %s\n", hms(td)) }')
+          PRCELL="no PR was made"
+          if [ -n "$PR" ]; then PRCELL="[PR #$PR](https://github.com/$R/pull/$PR)"; fi
+          GI=$(printf '%s\n' "| What | Status |" "|---|---|" "| Issue | [#$ISSUE: $T](https://github.com/$R/issues/$ISSUE) |" "| The fix | $PRCELL |" "| Front door check | ${GO:--} |" "| First review | ${V1:--} |" "| Second review | ${V2:--} |" "| QA attack | ${QA:--} |" "| Merged into main | ${SHIP:--} |")
           DETAIL=""
           if [ "$GO" = "needs-info" ]; then OUT="Stopped at the front door: I need answers from you first. My questions are below."
             DETAIL=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body' 2>/dev/null || true)
@@ -634,6 +637,10 @@ jobs:
           fi
           {
             echo "# For Josh: the whole story in one place"
+            echo
+            echo "## General information"
+            echo
+            printf '%s\n' "$GI"
             echo
             echo "## 1. What we were fixing"
             echo "**Issue #$ISSUE: $T** ([open it](https://github.com/$R/issues/$ISSUE))"
@@ -660,4 +667,4 @@ jobs:
               printf '%s\n' "$TABLE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "$OUT"
+          printf '%s\n\n%s\n' "$OUT" "$GI"
