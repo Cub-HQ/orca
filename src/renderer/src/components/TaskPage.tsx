@@ -610,20 +610,44 @@ function formatRelativeTime(input: string): string {
   return formatUiRelativeTimeFromDate(input)
 }
 
-function GitHubFactoryStageChip({
+export function GitHubFactoryStageChip({
   stage,
-  enteredAt
+  enteredAt,
+  issueNumber,
+  issueUrl
 }: {
   stage: NonNullable<GitHubWorkItem['factoryStage']>
   enteredAt?: string
+  issueNumber: number
+  issueUrl: string
 }): React.JSX.Element {
   const now = useNow(30_000)
   const elapsed = enteredAt ? formatTaskPageFactoryStageElapsed(enteredAt, now) : null
+  const label = translate(
+    'auto.components.TaskPage.factoryStageOpenIssue',
+    'Open issue #{{value0}} on GitHub',
+    { value0: issueNumber }
+  )
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/50 bg-muted/40 px-1.5 py-0 text-[10px] font-medium text-foreground">
-      <span>{getTaskPageFactoryStageLabel(stage)}</span>
-      {elapsed ? <span className="text-muted-foreground">{elapsed}</span> : null}
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={(event) => {
+            event.stopPropagation()
+            void window.api.shell.openUrl(issueUrl)
+          }}
+          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/50 bg-muted/40 px-1.5 py-0 text-[10px] font-medium text-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <span>{getTaskPageFactoryStageLabel(stage)}</span>
+          {elapsed ? <span className="text-muted-foreground">{elapsed}</span> : null}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={4}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -9693,6 +9717,8 @@ export default function TaskPage(): React.JSX.Element {
                                 <GitHubFactoryStageChip
                                   stage={item.factoryStage}
                                   enteredAt={item.factoryStageEnteredAt}
+                                  issueNumber={item.number}
+                                  issueUrl={item.url}
                                 />
                               ) : null}
                               {selectedRepos.length > 1 && itemRepo ? (
