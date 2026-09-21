@@ -26,7 +26,9 @@ jobs:
         run: |
           export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
           W="$RUNNER_TEMP/pipe-intake-$ISSUE"
-          STAGE="Intake V1"; MODEL="oauth-pool/gpt-5.6-sol"; EFFORT="xhigh"; T0=$(date +%s)
+          STAGE="Intake V1"; MODEL="oauth-pool/gpt-5.6-sol"; EFFORT="xhigh"
+          { echo "W=$W"; echo "STAGE=Intake V1"; echo "MODEL=oauth-pool/gpt-5.6-sol"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
           mkdir -p "$W" && cd "$W"
           cat > brief.md <<EOF
           You are DF Intake, the factory front door. Read issue #$ISSUE on $R with gh api repos/$R/issues/$ISSUE (and its comments).
@@ -40,14 +42,18 @@ jobs:
           - Never edit code. Reply DONE when posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
-      - name: Extract gate
+      - name: "Hand-off → Build"
         id: v
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -55,9 +61,7 @@ jobs:
         run: |
           B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body')
           printf '### Hand-off → Build\n\n%s\n\n_Passed to Build as: the ## DF_Intake comment on issue #%s (the builder reads the issue + comments)._\n\n' "$B" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
-          echo "##[group]Hand-off sent → Build"
           printf '%s\n' "$B"
-          echo "##[endgroup]"
           L=$(printf '%s\n' "$B" | tail -1)
           case "$L" in
             INTAKE=go) G=go ;;
@@ -76,23 +80,29 @@ jobs:
     outputs:
       pr: ${{ steps.pr.outputs.pr }}
     steps:
+      - name: "Received ← Intake"
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          W="$RUNNER_TEMP/pipe-build-$ISSUE"
+          { echo "W=$W"; echo "STAGE=Build V1"; echo "MODEL=oauth-pool/gpt-5.6-sol"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
+          rm -rf "$W"
+          git clone --quiet "https://github.com/$R.git" "$W"
+          cd "$W"
+          git checkout -B "actions/issue-$ISSUE"
+          gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body' > received.md || true
+          cat received.md
+          printf '### Build received (from Intake)\n\n%s\n\n' "$(cat received.md)" >> "$GITHUB_STEP_SUMMARY"
       - name: Builder from scratch
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           R: ${{ github.repository }}
         run: |
           export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
-          W="$RUNNER_TEMP/pipe-build-$ISSUE"
-          STAGE="Build V1"; MODEL="oauth-pool/gpt-5.6-sol"; EFFORT="xhigh"; T0=$(date +%s)
-          rm -rf "$W"
-          git clone --quiet "https://github.com/$R.git" "$W"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
           cd "$W"
-          git checkout -B "actions/issue-$ISSUE"
-          gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body' > received.md || true
-          echo "##[group]Received hand-off (from Intake)"
-          cat received.md
-          echo "##[endgroup]"
-          printf '### Build received (from Intake)\n\n%s\n\n' "$(cat received.md)" >> "$GITHUB_STEP_SUMMARY"
           cat > brief.md <<EOF
           You are DF_Builder. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Builder.md and follow it, with these overrides:
           - You are IN a fresh checkout of $R on branch actions/issue-$ISSUE. Build issue #$ISSUE from scratch: read it with gh api repos/$R/issues/$ISSUE. Implement its Done-when exactly.
@@ -103,19 +113,26 @@ jobs:
           - Reply DONE when the receipt comment is posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
-      - name: Find PR
+      - name: "Hand-off → Review"
         id: pr
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           R: ${{ github.repository }}
         run: |
+          B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("DF_PR="))] | last | .body')
+          printf '%s\n' "$B"
+          printf '### Hand-off → Review\n\n%s\n\n_Passed to Review as: the DF_PR comment on issue #%s plus the PR diff._\n\n' "$B" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
           N=$(gh api "repos/$R/pulls?head=Cubatica:actions/issue-$ISSUE&state=open" --jq '.[0].number')
           echo "pr=$N" >> "$GITHUB_OUTPUT"
           test -n "$N" && test "$N" != null
@@ -127,14 +144,15 @@ jobs:
     outputs:
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
-      - name: Independent review
+      - name: "Received ← Build"
         env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
           PR: ${{ needs.build.outputs.pr }}
           R: ${{ github.repository }}
         run: |
-          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          export PATH="/opt/homebrew/bin:$PATH"
           W="$RUNNER_TEMP/pipe-review1-$PR"
-          STAGE="Review V1"; MODEL="oauth-pool/claude-opus-5"; EFFORT="xhigh"; T0=$(date +%s)
+          { echo "W=$W"; echo "STAGE=Review V1"; echo "MODEL=oauth-pool/claude-opus-5"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
           rm -rf "$W"
           git clone --quiet "https://github.com/$R.git" "$W"
           cd "$W"
@@ -142,10 +160,16 @@ jobs:
           git fetch --quiet origin "$PB"
           git checkout --quiet -B "$PB" "origin/$PB"
           gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("DF_PR="))] | last | .body' > received.md || true
-          echo "##[group]Received hand-off (from Build)"
           cat received.md
-          echo "##[endgroup]"
           printf '### Review received (from Build)\n\n%s\n\n' "$(cat received.md)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Independent review
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+          cd "$W"
           cat > brief.md <<EOF
           You are DF_Reviewer. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Reviewer.md and follow it, with these overrides:
           - Review PR #$PR on $R in this fresh checkout of its head. Independent pass: diff via REST (gh api), verify the linked issue's Done-when is actually met, re-run the gates YOURSELF: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering your changed paths (vitest run <changed test files>). Verify the new tests are real guards (would fail without the fix). Verify the PR merges (mergeable via gh api).
@@ -156,14 +180,18 @@ jobs:
           - Reply DONE when posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
-      - name: Extract verdict
+      - name: "Hand-off → Rework / QA"
         id: v
         env:
           PR: ${{ needs.build.outputs.pr }}
@@ -171,9 +199,7 @@ jobs:
         run: |
           B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body')
           printf '### Hand-off → Rework / QA\n\n%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
-          echo "##[group]Hand-off sent → Rework / QA"
           printf '%s\n' "$B"
-          echo "##[endgroup]"
           V=$(printf '%s\n' "$B" | tail -1 | grep -oE 'approve|block')
           echo "verdict=$V" >> "$GITHUB_OUTPUT"
           echo "verdict: $V"
@@ -185,14 +211,14 @@ jobs:
     runs-on: [self-hosted, m4]
     timeout-minutes: 45
     steps:
-      - name: Fix blocking findings
+      - name: "Received ← Review"
         env:
           PR: ${{ needs.build.outputs.pr }}
           R: ${{ github.repository }}
         run: |
-          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          export PATH="/opt/homebrew/bin:$PATH"
           W="$RUNNER_TEMP/pipe-rework-$PR"
-          STAGE="Rework V1"; MODEL="oauth-pool/gpt-5.6-sol"; EFFORT="xhigh"; T0=$(date +%s)
+          { echo "W=$W"; echo "STAGE=Rework V1"; echo "MODEL=oauth-pool/gpt-5.6-sol"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
           rm -rf "$W"
           git clone --quiet "https://github.com/$R.git" "$W"
           cd "$W"
@@ -200,10 +226,16 @@ jobs:
           git fetch --quiet origin "$PB"
           git checkout --quiet -B "$PB" "origin/$PB"
           gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body' > block.md
-          echo "##[group]Received hand-off (from Review)"
           cat block.md
-          echo "##[endgroup]"
           printf '### Rework received (from Review)\n\n%s\n\n' "$(cat block.md)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Fix blocking findings
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+          cd "$W"
           cat > brief.md <<EOF
           You are DF_Builder on a REWORK cycle. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Builder.md.
           - You are IN a checkout of PR #$PR's branch on $R. block.md holds the blocking independent review: fix EVERY P1 on THIS branch. P2s optional. No new PR, no rebase.
@@ -214,13 +246,27 @@ jobs:
           - Reply DONE when pushed and posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Hand-off → Re-review"
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("DF_REWORK="))] | last | .body')
+          printf '%s\n' "$B"
+          printf '### Hand-off → Re-review\n\n%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
+          test -n "$B"
   review2:
     name: "Re-review"
     needs: [build, rework]
@@ -229,14 +275,14 @@ jobs:
     outputs:
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
-      - name: Scoped re-review
+      - name: "Received ← Review + Rework"
         env:
           PR: ${{ needs.build.outputs.pr }}
           R: ${{ github.repository }}
         run: |
-          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          export PATH="/opt/homebrew/bin:$PATH"
           W="$RUNNER_TEMP/pipe-review2-$PR"
-          STAGE="Re-review V1"; MODEL="oauth-pool/claude-opus-5"; EFFORT="xhigh"; T0=$(date +%s)
+          { echo "W=$W"; echo "STAGE=Re-review V1"; echo "MODEL=oauth-pool/claude-opus-5"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
           rm -rf "$W"
           git clone --quiet "https://github.com/$R.git" "$W"
           cd "$W"
@@ -245,10 +291,16 @@ jobs:
           git checkout --quiet -B "$PB" "origin/$PB"
           gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body' > prior-review.md
           REWORK=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("DF_REWORK="))] | last | .body')
-          echo "##[group]Received hand-off (from Review + Rework)"
           cat prior-review.md; printf '\n---\n%s\n' "$REWORK"
-          echo "##[endgroup]"
           printf '### Re-review received\n\n%s\n\n---\n\n%s\n\n' "$(cat prior-review.md)" "$REWORK" >> "$GITHUB_STEP_SUMMARY"
+      - name: Scoped re-review
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+          cd "$W"
           cat > brief.md <<EOF
           You are DF_Reviewer on a RE-REVIEW after a rework cycle. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Reviewer.md.
           - PR #$PR on $R, fresh checkout of current head. prior-review.md is the blocking review: verify each P1 is actually fixed by the new commits; do not re-audit cleared paths unless the rework touched them.
@@ -260,14 +312,18 @@ jobs:
           - Reply DONE when posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
-      - name: Extract verdict
+      - name: "Hand-off → QA / Josh"
         id: v
         env:
           PR: ${{ needs.build.outputs.pr }}
@@ -275,9 +331,7 @@ jobs:
         run: |
           B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body')
           printf '### Hand-off → Rework / QA\n\n%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
-          echo "##[group]Hand-off sent → Rework / QA"
           printf '%s\n' "$B"
-          echo "##[endgroup]"
           V=$(printf '%s\n' "$B" | tail -1 | grep -oE 'approve|block')
           echo "verdict=$V" >> "$GITHUB_OUTPUT"
           echo "verdict: $V"
@@ -291,15 +345,14 @@ jobs:
     outputs:
       qa: ${{ steps.v.outputs.qa }}
     steps:
-      - name: Adversarial QA
+      - name: "Received ← Review"
         env:
-          ISSUE: ${{ github.event.issue.number || inputs.issue }}
           PR: ${{ needs.build.outputs.pr }}
           R: ${{ github.repository }}
         run: |
-          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          export PATH="/opt/homebrew/bin:$PATH"
           W="$RUNNER_TEMP/pipe-qa-$PR"
-          STAGE="QA V1"; MODEL="oauth-pool/claude-opus-5"; EFFORT="xhigh"; T0=$(date +%s)
+          { echo "W=$W"; echo "STAGE=QA V1"; echo "MODEL=oauth-pool/claude-opus-5"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
           rm -rf "$W"
           git clone --quiet "https://github.com/$R.git" "$W"
           cd "$W"
@@ -307,10 +360,17 @@ jobs:
           git fetch --quiet origin "$PB"
           git checkout --quiet -B "$PB" "origin/$PB"
           gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body' > received.md || true
-          echo "##[group]Received hand-off (from Review)"
           cat received.md
-          echo "##[endgroup]"
           printf '### QA received (from Review)\n\n%s\n\n' "$(cat received.md)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Adversarial QA
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+          cd "$W"
           cat > brief.md <<EOF
           You are DF_QA. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_QA.md and follow it, with these overrides:
           - Surface: Orca desktop UI. You are IN a fresh checkout of PR #$PR's head on $R (the approved fix for issue #$ISSUE). Attack the changed surface: run the specific vitest files covering the changed components/stores plus any new tests (they must fail when you stub the fix out - spot-check one), run pnpm run typecheck, and execute the changed code paths with a throwaway node/vitest script where feasible. A full app launch is NOT available headless - judge from executed tests + targeted scripts, and say so plainly in your evidence.
@@ -321,14 +381,18 @@ jobs:
           - Never edit code. Reply DONE when posted.
           EOF
           omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
           SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
           DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
           USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
-          echo "##[group]General Info"
           printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
-          echo "##[endgroup]"
           printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
-      - name: Extract verdict
+      - name: "Hand-off → Ship / Josh"
         id: v
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -336,6 +400,7 @@ jobs:
         run: |
           B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body')
           printf '%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$B"
           Q=$(printf '%s\n' "$B" | tail -1 | grep -oE 'pass|fail')
           echo "qa=$Q" >> "$GITHUB_OUTPUT"
           echo "qa: $Q"
