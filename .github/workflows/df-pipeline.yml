@@ -47,6 +47,7 @@ jobs:
           You are DF Intake, the factory front door. Read issue #$ISSUE on $R with gh api repos/$R/issues/$ISSUE (and its comments).
           Judge ONLY: can a builder implement this without guessing? It needs (1) a clear defect or feature, (2) an explicit testable Done-when, (3) everything referenced actually reachable in this repo.
           Post ONE comment on issue #$ISSUE starting '## DF_Intake':
+          - Start with a section '### What we are fixing and why': 2-4 short sentences in plain words - what is broken or missing today, why fixing it matters to Josh (what it unblocks or stops annoying), then on its own line: 'Issue: https://github.com/$R/issues/$ISSUE'.
           - Either way, show your reasoning as a 3-line checklist, one per criterion: 'Defect clear: YES/NO - <why>', 'Done-when testable: YES/NO - <why>', 'References reachable: YES/NO - <why>'.
           - If all YES: add a section '**Hand-off package (exactly what the builder gets)**' with 3 short bullets: What is broken, What done looks like, Where to look (files). This comment on the issue IS the data passed to the Build stage - the builder reads the issue plus its comments. LAST line exactly INTAKE=go
           - If any NO: after the checklist, numbered questions Josh must answer (only what is truly missing), LAST line exactly INTAKE=needs-info
@@ -506,10 +507,98 @@ jobs:
           echo "qa=$Q" >> "$GITHUB_OUTPUT"
           echo "qa: $Q"
           test -n "$Q"
-  ship:
-    name: "Ship"
+  rebase:
+    name: "Rebase"
     needs: [build, qa]
     if: always() && needs.qa.outputs.qa == 'pass'
+    runs-on: [self-hosted, m4]
+    timeout-minutes: 30
+    outputs:
+      stats: ${{ steps.gi.outputs.stats }}
+    steps:
+      - name: "Needed?"
+        id: chk
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          W="$RUNNER_TEMP/pipe-rebase-$PR"
+          { echo "W=$W"; echo "STAGE=Rebase V1"; echo "MODEL=oauth-pool/gpt-5.6-sol"; echo "EFFORT=xhigh"; } >> "$GITHUB_ENV"
+          rm -rf "$W"
+          git clone --quiet "https://github.com/$R.git" "$W"
+          cd "$W"
+          git config user.name "df-pipeline"
+          git config user.email "df-pipeline@users.noreply.github.com"
+          PB=$(gh api "repos/$R/pulls/$PR" --jq .head.ref)
+          echo "PB=$PB" >> "$GITHUB_ENV"
+          git fetch --quiet origin "$PB"
+          if git merge --no-commit --no-ff "origin/$PB" >/dev/null 2>&1; then
+            git merge --abort 2>/dev/null || true
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            MSG="No rebase needed: nothing that merged ahead of this fix touches the same lines. It still lands on main cleanly."
+          else
+            CONF=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+            git merge --abort 2>/dev/null || true
+            echo "mode=conflict" >> "$GITHUB_OUTPUT"
+            MSG=$(printf 'Rebase needed: another fix merged into main first and edits the same lines as PR #%s. A builder will replay this fix on top of it and combine the overlapping edits.\n\nWhere they overlap:\n%s' "$PR" "$CONF")
+          fi
+          printf '### Rebase check\n\n%s\n\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$MSG"
+      - name: Combine with what merged first
+        if: steps.chk.outputs.mode == 'conflict'
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+          cd "$W"
+          git checkout --quiet -B "$PB" "origin/$PB"
+          cat > brief.md <<EOF
+          You are DF_Builder on a REBASE cycle. Read your card at /Users/joshuabretag/.omp/agent/agents/DF_Builder.md.
+          - PR #$PR (the QA-approved fix for issue #$ISSUE on $R) no longer lands cleanly: another fix reached main first and edits the same lines. You are IN a checkout of the PR branch $PB.
+          - Run git rebase origin/main and resolve EVERY conflict so BOTH fixes survive: keep what the newer code on main does AND keep this PR's intent. Never delete the other fix's changes to make yours fit.
+          - Gates after the rebase: pnpm install --frozen-lockfile, pnpm run typecheck, pnpm run check:code-quality:changed, and the vitest files covering the changed paths (vitest run <changed test files>).
+          - When green: git push --force-with-lease origin $PB. Post ONE comment on PR #$PR: first line DF_REBASE=done, second line HEAD_SHA=<full new head sha>, then in plain English which files overlapped and how you combined the two fixes.
+          - Every GitHub read/write MUST use gh api (REST). The gh pr / gh issue subcommands are BANNED: GraphQL quota is exhausted and they fail.
+          - Voice rule: Josh reads this and he is not a programmer. Write your whole comment so a smart 10-year-old gets it: short sentences, plain words, and any technical word gets a one-phrase explanation right there. Say what you did, what you found, and what happens next. Keep the machine lines exact and untouched (INTAKE=, DF_PR=, HEAD_SHA=, DF_REWORK=, DF_REBASE=, DF_REVIEW=, DF_QA=).
+          - Reply DONE when pushed and posted.
+          EOF
+          omp -p --mode json --thinking "$EFFORT" --model "$MODEL" "@brief.md" | tee omp-events.jsonl | jq -rc --unbuffered 'if .type=="session" then "RESUME: omp -r \(.id) --cwd '"$W"'" elif .type=="tool_execution_start" then "-> \(.toolName): \(.intent // (.args.command // "" | .[0:80]))" elif .type=="message_end" and .message.role=="assistant" then ([.message.content[]? | select(.type=="text") | .text] | join(" ") | .[0:300] | select(length>0)) else empty end'
+      - name: General Info
+        id: gi
+        if: always()
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          if [ -z "${T0:-}" ] || [ ! -f "$W/omp-events.jsonl" ]; then echo "stage never ran"; exit 0; fi
+          cd "$W"
+          SID=$(jq -r 'select(.type=="session") | .id' omp-events.jsonl | head -1)
+          DUR=$(( $(date +%s) - T0 )); DURFMT="$((DUR/60))m $((DUR%60))s"
+          USAGE=$(jq -s -r '[.[] | select(.type=="message_end") | .message.usage // empty] | "\((map(.input//0)|add)//0) in + \((map(.output//0)|add)//0) out + \((map(.cacheRead//0)|add)//0) cached, cost $\((map(.cost as $c | if ($c|type)=="number" then $c elif ($c|type)=="object" then ($c.total//0) else 0 end)|add)//0)"' omp-events.jsonl 2>/dev/null || echo "n/a")
+          TOK=$(jq -s '[.[] | select(.type=="message_end") | .message.usage // empty] | (map(.input//0)|add//0) + (map(.output//0)|add//0)' omp-events.jsonl 2>/dev/null || echo 0)
+          echo "stats=${STAGE}|${MODEL}|${EFFORT}|${TOK}|${DUR}" >> "$GITHUB_OUTPUT"
+          printf 'stage: %s\nmodel: %s\neffort: %s\nduration: %s\ntokens: %s\nresume: omp -r %s --cwd %s\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W"
+          printf '### %s\n- model: `%s`\n- effort: %s\n- duration: %s\n- tokens: %s\n- resume: `omp -r %s --cwd %s`\n\n' "$STAGE" "$MODEL" "$EFFORT" "$DURFMT" "$USAGE" "$SID" "$W" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Hand-off → Ship"
+        if: steps.chk.outputs.mode == 'conflict'
+        env:
+          PR: ${{ needs.build.outputs.pr }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          cd "$W"
+          git fetch --quiet origin main "$PB"
+          git merge-base --is-ancestor origin/main "origin/$PB"
+          B=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("DF_REBASE="))] | last | .body')
+          printf '### Hand-off → Ship\n\n%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$B"
+          test -n "$B"
+  ship:
+    name: "Ship"
+    needs: [build, qa, rebase]
+    if: always() && needs.qa.outputs.qa == 'pass' && needs.rebase.result == 'success'
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:
@@ -536,7 +625,7 @@ jobs:
           gh api -X PATCH "repos/$R/issues/$ISSUE" -f state=closed >/dev/null
   finalize:
     name: "Verdict"
-    needs: [intake, build, review1, rework, review2, qa, ship]
+    needs: [intake, build, review1, rework, review2, qa, rebase, ship]
     if: always() && needs.intake.result != 'skipped'
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
@@ -590,13 +679,15 @@ jobs:
           STRW: ${{ needs.rework.outputs.stats }}
           STR2: ${{ needs.review2.outputs.stats }}
           STQ: ${{ needs.qa.outputs.stats }}
+          STRB: ${{ needs.rebase.outputs.stats }}
+          RB: ${{ needs.rebase.result }}
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
           T=$(gh api "repos/$R/issues/$ISSUE" --jq .title)
           BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""' | awk 'NF==0 && n>400 {exit} {print; n+=length($0)}' | head -c 2000)
           QAB=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body' 2>/dev/null || true)
           TRY=$(printf '%s\n' "$QAB" | awk '/^### Try it yourself/{f=1} f && /^### / && !/^### Try it yourself/{exit} f && !/^\*\*Hand-off/{print}')
-          TABLE=$(for S in "$STI" "$STB" "$STR1" "$STRW" "$STR2" "$STQ"; do if [ -n "$S" ]; then printf '%s\n' "$S"; fi; done | awk -F'|' '
+          TABLE=$(for S in "$STI" "$STB" "$STR1" "$STRW" "$STR2" "$STQ" "$STRB"; do if [ -n "$S" ]; then printf '%s\n' "$S"; fi; done | awk -F'|' '
             function commas(n, s,r){ r=sprintf("%d",n); s=""; while (length(r)>3){ s="," substr(r,length(r)-2) s; r=substr(r,1,length(r)-3)} return r s }
             function hms(d){ return sprintf("%02d:%02d:%02d", d/3600, (d%3600)/60, d%60) }
             { name=$1; sub(/ V[0-9]+$/,"",name); model=$2; sub(/^oauth-pool\//,"",model); eff=$3; tok=$4+0; dur=$5+0
@@ -613,7 +704,7 @@ jobs:
               printf("Time: %s\n", hms(td)) }')
           PRCELL="no PR was made"
           if [ -n "$PR" ]; then PRCELL="[PR #$PR](https://github.com/$R/pull/$PR)"; fi
-          GI=$(printf '%s\n' "| What | Status |" "|---|---|" "| Issue | [#$ISSUE: $T](https://github.com/$R/issues/$ISSUE) |" "| The fix | $PRCELL |" "| Front door check | ${GO:--} |" "| First review | ${V1:--} |" "| Second review | ${V2:--} |" "| QA attack | ${QA:--} |" "| Merged into main | ${SHIP:--} |")
+          GI=$(printf '%s\n' "| What | Status |" "|---|---|" "| Issue | [#$ISSUE: $T](https://github.com/$R/issues/$ISSUE) |" "| The fix | $PRCELL |" "| Front door check | ${GO:--} |" "| First review | ${V1:--} |" "| Second review | ${V2:--} |" "| QA attack | ${QA:--} |" "| Rebased onto newest main | ${RB:--} |" "| Merged into main | ${SHIP:--} |")
           DETAIL=""
           if [ "$GO" = "needs-info" ]; then OUT="Stopped at the front door: I need answers from you first. My questions are below."
             DETAIL=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body' 2>/dev/null || true)
