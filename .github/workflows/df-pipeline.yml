@@ -616,12 +616,12 @@ jobs:
           elif [ -z "$PR" ]; then OUT="Not shipped: the build stage never produced a fix. Click the Build box above to see where it stopped."
           else OUT="Not shipped: the fix (PR #$PR) got approved but the tail end did not finish (qa=$QA, merge=$SHIP). It is parked on the issue for you."
           fi
-          if [ "$GO" = "needs-info" ]; then FL="blocked"
+          if [ "$GO" = "needs-info" ]; then FL="needs-info"
           elif [ "$SHIP" = "success" ]; then FL=""
-          else FL="blocked"
+          else FL="needs-you"
           fi
+          for L in building pr-open reviewed awaiting-review blocked merged deployed needs-info needs-you; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
           if [ -n "$FL" ]; then
-            for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
             gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:$FL" >/dev/null 2>&1 || true
           fi
           {
