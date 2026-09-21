@@ -611,12 +611,18 @@ jobs:
               printf("- All models together: %s tokens\n", commas(tt))
               print ""
               printf("Time: %s\n", hms(td)) }')
-          if [ "$GO" = "needs-info" ]; then OUT="Stopped at the front door: I need answers from you first. Read the DF_Intake comment on the issue and reply there."
+          DETAIL=""
+          if [ "$GO" = "needs-info" ]; then OUT="Stopped at the front door: I need answers from you first. My questions are below."
+            DETAIL=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Intake"))] | last | .body' 2>/dev/null || true)
           elif [ "$SHIP" = "success" ]; then OUT="Shipped. The fix (PR #$PR) was built, independently reviewed, QA-attacked, and merged into main. The issue is closed."
-          elif [ "$QA" = "fail" ]; then OUT="Not shipped: QA tried to break the fix (PR #$PR) and DID. The DF_QA comment on the issue shows exactly what broke and how to reproduce it."
-          elif [ "$V1" = "block" ] && [ "$V2" != "approve" ]; then OUT="Not shipped: the reviewer said no twice (PR #$PR). The newest DF_Reviewer comment on the PR lists what is still wrong."
-          elif [ -z "$PR" ]; then OUT="Not shipped: the build stage never produced a fix. Click the Build box above to see where it stopped."
-          else OUT="Not shipped: the fix (PR #$PR) got approved but the tail end did not finish (qa=$QA, merge=$SHIP). It is parked on the issue for you."
+          elif [ "$QA" = "fail" ]; then OUT="Not shipped: QA tried to break the fix (PR #$PR) and DID. QA's full writeup is below - what broke, the proof, and how to reproduce it."
+            DETAIL="$QAB"
+          elif [ "$V1" = "block" ] && [ "$V2" != "approve" ]; then OUT="Not shipped: the reviewer said no twice (PR #$PR). The reviewer's full findings are below."
+            DETAIL=$(gh api "repos/$R/issues/$PR/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_Reviewer"))] | last | .body' 2>/dev/null || true)
+          elif [ -z "$PR" ]; then OUT="Not shipped: the build stage never produced a fix. The build's last words are below."
+            DETAIL=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select((.body|startswith("## DF_")) or (.body|startswith("DF_")))] | last | .body' 2>/dev/null || true)
+          else OUT="Not shipped: the fix (PR #$PR) got approved but the tail end did not finish (qa=$QA, merge=$SHIP). The newest stage report is below."
+            DETAIL=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_"))] | last | .body' 2>/dev/null || true)
           fi
           if [ "$GO" = "needs-info" ]; then FL="needs-info"
           elif [ "$SHIP" = "success" ]; then FL=""
@@ -637,6 +643,10 @@ jobs:
             echo "## 2. What happened"
             echo "$OUT"
             echo
+            if [ -n "$DETAIL" ]; then
+              printf '%s\n' "$DETAIL"
+              echo
+            fi
             if [ -n "$TRY" ]; then
               echo "## 3. How to test it yourself"
               printf '%s\n' "$TRY"
