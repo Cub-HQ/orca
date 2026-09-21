@@ -19,6 +19,16 @@ jobs:
     outputs:
       go: ${{ steps.v.outputs.go }}
     steps:
+      - name: "What we're fixing"
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          T=$(gh api "repos/$R/issues/$ISSUE" --jq .title)
+          BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""')
+          printf '# What we are fixing\n\n**Issue #%s: %s**\n\n%s\n\n[Open the issue](https://github.com/%s/issues/%s)\n\n---\n\n' "$ISSUE" "$T" "$BODY" "$R" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Issue #%s: %s\n' "$ISSUE" "$T"
       - name: Enough to build?
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -421,6 +431,8 @@ jobs:
           R: ${{ github.repository }}
         run: |
           B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body')
+          T=$(printf '%s\n' "$B" | awk '/^### Try it yourself/{f=1} f && /^### / && !/^### Try it yourself/{exit} f && !/^\*\*Hand-off/{print}')
+          if [ -n "$T" ]; then printf '# How to test it\n\n%s\n\n---\n\n' "$T" >> "$GITHUB_STEP_SUMMARY"; fi
           printf '%s\n\n' "$B" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$B"
           Q=$(printf '%s\n' "$B" | tail -1 | grep -oE 'pass|fail')
@@ -486,3 +498,44 @@ jobs:
           else
             mark "actions:parked"; say "The builder fixed once, but the reviewer still says no (first review=$V1, second look=$V2). Parked for you - the newest DF_Reviewer comment on PR #$PR says why."
           fi
+      - name: "For Josh"
+        if: always()
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          PR: ${{ needs.build.outputs.pr }}
+          GO: ${{ needs.intake.outputs.go }}
+          V1: ${{ needs.review1.outputs.verdict }}
+          V2: ${{ needs.review2.outputs.verdict }}
+          QA: ${{ needs.qa.outputs.qa }}
+          SHIP: ${{ needs.ship.result }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          T=$(gh api "repos/$R/issues/$ISSUE" --jq .title)
+          BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""')
+          QAB=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body' 2>/dev/null || true)
+          TRY=$(printf '%s\n' "$QAB" | awk '/^### Try it yourself/{f=1} f && /^### / && !/^### Try it yourself/{exit} f && !/^\*\*Hand-off/{print}')
+          if [ "$GO" = "needs-info" ]; then OUT="Stopped at the front door: I need answers from you first. Read the DF_Intake comment on the issue and reply there."
+          elif [ "$SHIP" = "success" ]; then OUT="Shipped. The fix (PR #$PR) was built, independently reviewed, QA-attacked, and merged into main. The issue is closed."
+          elif [ "$QA" = "fail" ]; then OUT="Not shipped: QA tried to break the fix (PR #$PR) and DID. The DF_QA comment on the issue shows exactly what broke and how to reproduce it."
+          elif [ "$V1" = "block" ] && [ "$V2" != "approve" ]; then OUT="Not shipped: the reviewer said no twice (PR #$PR). The newest DF_Reviewer comment on the PR lists what is still wrong."
+          elif [ -z "$PR" ]; then OUT="Not shipped: the build stage never produced a fix. Click the Build box above to see where it stopped."
+          else OUT="Not shipped: the fix (PR #$PR) got approved but the tail end did not finish (qa=$QA, merge=$SHIP). It is parked on the issue for you."
+          fi
+          {
+            echo "# For Josh: the whole story in one place"
+            echo
+            echo "## 1. What we were fixing"
+            echo "**Issue #$ISSUE: $T** ([open it](https://github.com/$R/issues/$ISSUE))"
+            echo
+            printf '%s\n' "$BODY"
+            echo
+            echo "## 2. What happened"
+            echo "$OUT"
+            echo
+            if [ -n "$TRY" ]; then
+              echo "## 3. How to test it yourself"
+              printf '%s\n' "$TRY"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$OUT"
