@@ -1,4 +1,5 @@
 name: df-pipeline
+run-name: "#${{ github.event.issue.number || inputs.issue }} ${{ github.event.issue.title || 'manual' }}"
 on:
   issues:
     types: [labeled]
