@@ -625,7 +625,8 @@ export function GitHubFactoryStageChip({
   const elapsed = enteredAt ? formatTaskPageFactoryStageElapsed(enteredAt, now) : null
   const label = translate(
     'auto.components.TaskPage.factoryStageOpenIssue',
-    `Open issue #${issueNumber} on GitHub`
+    'Open issue #{{value0}} on GitHub',
+    { value0: issueNumber }
   )
   return (
     <Tooltip>

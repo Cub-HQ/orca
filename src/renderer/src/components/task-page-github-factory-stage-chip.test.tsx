@@ -7,7 +7,16 @@ import { GitHubFactoryStageChip } from './TaskPage'
 
 vi.mock('@/i18n/i18n', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...(actual as object), translate: (_key: string, fallback: string) => fallback }
+  return {
+    ...(actual as object),
+    translate: (_key: string, fallback: string, values?: Record<string, string | number>) =>
+      values
+        ? Object.entries(values).reduce(
+            (text, [name, value]) => text.replaceAll(`{{${name}}}`, String(value)),
+            fallback
+          )
+        : fallback
+  }
 })
 
 vi.mock('@/components/dashboard/useNow', () => ({
