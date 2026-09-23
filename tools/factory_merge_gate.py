@@ -150,7 +150,7 @@ def main():
     if actual != args.candidate_sha or not re.fullmatch(r'[0-9a-f]{40}', actual):
         raise ValueError('checkout HEAD must equal the full candidate SHA')
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.base_sha, actual], check=True)
-    repo = args.repo.removeprefix('Cubatica/')
+    repo = args.repo.removeprefix('Cub-HQ/')
     if repo == 'fitness-coach':
         os.chdir('runtime')
         sys.path.insert(0, str(Path.cwd()))

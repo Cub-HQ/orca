@@ -117,7 +117,7 @@ jobs:
             try:
                 return subprocess.check_output([
                     "gh", "api", "-H", "Accept: application/vnd.github.raw+json",
-                    "repos/Cubatica/omp-config-backup/contents/" + path + "?ref=main",
+                    "repos/Cub-HQ/omp-config-backup/contents/" + path + "?ref=main",
                 ], text=True, timeout=30)
             except (subprocess.SubprocessError, OSError) as exc:
                 print("::warning::Standing rulings unavailable: " + path + " (" + type(exc).__name__ + ")")
@@ -387,7 +387,7 @@ jobs:
         B=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("DF_PR="))] | last | .body')
         printf '%s\n' "$B"
         printf '### Hand-off → Review\n\n%s\n\n_Passed to Review as: the DF_PR comment on issue #%s plus the PR diff._\n\n' "$B" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
-        N=$(gh api "repos/$R/pulls?head=Cubatica:actions/issue-$ISSUE&state=open" --jq '.[0].number')
+        N=$(gh api "repos/$R/pulls?head=Cub-HQ:actions/issue-$ISSUE&state=open" --jq '.[0].number')
         echo "pr=$N" >> "$GITHUB_OUTPUT"
         test -n "$N" && test "$N" != null
       if: steps.resume.outputs.skip != 'true'
