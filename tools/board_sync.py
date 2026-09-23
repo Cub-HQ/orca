@@ -6,6 +6,10 @@ PROJECTS = (3, 4)  # users/Cubatica projects: Fitness Coach Factory, All Project
 OWNER = "Cubatica"
 
 
+def projects_for(repo):
+    return PROJECTS if repo == "Cubatica/fitness-coach" else (4,)
+
+
 # Current pipeline stage number shown when an issue is at each board stage (11 total:
 # intake build review rework re-review qa rebase merge deploy live-test verdict)
 STEPS_DONE = {"Queued": 0, "Building": 2, "In review": 3, "QA": 6, "Deploying": 9, "Live test": 10, "Shipped": 11}
@@ -92,7 +96,7 @@ def main():
         print(f"board: #{a.issue} closed; ignoring stage {a.stage}")
         return
 
-    for number in PROJECTS:
+    for number in projects_for(a.repo):
         try:
             sync_project(number, issue, a.stage, a.run_url)
             print(f"board: project {number} #{a.issue} -> {a.stage}")
