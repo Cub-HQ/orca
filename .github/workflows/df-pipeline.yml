@@ -9,12 +9,49 @@ on:
         description: Issue number
         required: true
 concurrency:
-  group: df-pipeline-${{ github.event.issue.number || inputs.issue }}
+  group: df-pipeline-${{ github.event.issue.number || inputs.issue }}${{ (github.event_name == 'issues' && github.event.label.name != 'actions:go') && github.run_id || '' }}
   cancel-in-progress: false
 jobs:
+  admission:
+    name: "Admission"
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'actions:go'
+    runs-on: [self-hosted, m4]
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.claim.outputs.go }}
+    steps:
+      - name: Skip duplicate triggers without touching the worker
+        id: claim
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          set -euo pipefail
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          ISSUE_JSON=$(gh api "repos/$R/issues/$ISSUE")
+          if [ "$(jq -r .state <<< "$ISSUE_JSON")" != open ]; then
+            echo "Skipped: issue is closed."
+            exit 0
+          fi
+          CREATED=$(gh api "repos/$R/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+          SINCE=$(jq -r .created_at <<< "$ISSUE_JSON")
+          RUNS=$(gh api --paginate "repos/$R/actions/workflows/df-pipeline.yml/runs?per_page=100&created=>=$SINCE")
+          CANDIDATES=$(jq -r --arg issue "#$ISSUE " --arg created "$CREATED" --argjson current "$GITHUB_RUN_ID" '.workflow_runs[] | select(.id < $current and (.display_title | startswith($issue)) and (.status != "completed" or .updated_at >= $created)) | .id' <<< "$RUNS")
+          for PRIOR in $CANDIDATES; do
+            JOBS=$(gh api --paginate "repos/$R/actions/runs/$PRIOR/jobs?filter=all&per_page=100")
+            OWNS=$(jq -s '[.[].jobs[] | select(.name == "Intake" and .started_at != null and .status != "queued" and .conclusion != "skipped")] | length > 0' <<< "$JOBS")
+            if [ "$OWNS" = true ]; then
+              echo "Skipped: run $PRIOR already owns this trigger window. Worker left untouched."
+              exit 0
+            fi
+          done
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "Admitted: no overlapping worker."
   intake:
     name: "Intake"
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'actions:go'
+    needs: admission
+    if: needs.admission.outputs.go == 'true'
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     outputs:
@@ -197,8 +234,8 @@ jobs:
           test -n "$G"
   build:
     name: "Build"
-    needs: intake
-    if: needs.intake.outputs.go == 'go'
+    needs: [admission, intake]
+    if: needs.admission.outputs.go == 'true' && (needs.intake.outputs.go == 'go')
     runs-on: [self-hosted, m4]
     timeout-minutes: 45
     outputs:
@@ -294,7 +331,8 @@ jobs:
           test -n "$N" && test "$N" != null
   review1:
     name: "Review"
-    needs: [intake, build]
+    needs: [admission, intake, build]
+    if: needs.admission.outputs.go == 'true'
     runs-on: [self-hosted, m4]
     timeout-minutes: 30
     outputs:
@@ -405,8 +443,8 @@ jobs:
           test -n "$V"
   rework:
     name: "Rework"
-    needs: [intake, build, review1]
-    if: needs.review1.outputs.verdict == 'block'
+    needs: [admission, intake, build, review1]
+    if: needs.admission.outputs.go == 'true' && (needs.review1.outputs.verdict == 'block')
     runs-on: [self-hosted, m4]
     timeout-minutes: 45
     outputs:
@@ -501,7 +539,8 @@ jobs:
           test -n "$B"
   review2:
     name: "Re-review"
-    needs: [intake, build, rework]
+    needs: [admission, intake, build, rework]
+    if: needs.admission.outputs.go == 'true'
     runs-on: [self-hosted, m4]
     timeout-minutes: 30
     outputs:
@@ -613,8 +652,8 @@ jobs:
           test -n "$V"
   qa:
     name: "QA"
-    needs: [intake, build, review1, review2]
-    if: always() && (needs.review1.outputs.verdict == 'approve' || needs.review2.outputs.verdict == 'approve')
+    needs: [admission, intake, build, review1, review2]
+    if: needs.admission.outputs.go == 'true' && (always() && (needs.review1.outputs.verdict == 'approve' || needs.review2.outputs.verdict == 'approve'))
     runs-on: [self-hosted, m4]
     timeout-minutes: 30
     outputs:
@@ -716,8 +755,8 @@ jobs:
           test -n "$Q"
   rebase:
     name: "Rebase"
-    needs: [intake, build, qa]
-    if: always() && needs.qa.outputs.qa == 'pass'
+    needs: [admission, intake, build, qa]
+    if: needs.admission.outputs.go == 'true' && (always() && needs.qa.outputs.qa == 'pass')
     runs-on: [self-hosted, m4]
     timeout-minutes: 30
     outputs:
@@ -824,8 +863,8 @@ jobs:
           test -n "$B"
   ship:
     name: "Ship"
-    needs: [build, qa, rebase]
-    if: always() && needs.qa.outputs.qa == 'pass' && needs.rebase.result == 'success'
+    needs: [admission, build, qa, rebase]
+    if: needs.admission.outputs.go == 'true' && (always() && needs.qa.outputs.qa == 'pass' && needs.rebase.result == 'success')
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:
@@ -870,8 +909,8 @@ jobs:
           gh api -X PATCH "repos/$R/issues/$ISSUE" -f state=closed >/dev/null
   finalize:
     name: "Verdict"
-    needs: [intake, build, review1, rework, review2, qa, rebase, ship]
-    if: always() && needs.intake.result != 'skipped' && needs.intake.outputs.go != 'orch-direct'
+    needs: [admission, intake, build, review1, rework, review2, qa, rebase, ship]
+    if: needs.admission.outputs.go == 'true' && (always() && needs.intake.result != 'skipped' && needs.intake.outputs.go != 'orch-direct')
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:
