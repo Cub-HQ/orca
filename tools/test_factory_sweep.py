@@ -27,6 +27,9 @@ class DeriveStageTest(unittest.TestCase):
             cases.extend([("open", [label], False, "Queued", "Human Review Needed"),
                           ("open", [label, "factory:blocked"], True, "QA", "Human Review Needed"),
                           ("closed", [label], True, "QA", "Shipped")])
+            cases.append(("open", [label, "factory:orch-action"], True, "QA", "Blocked"))
+        cases.extend([("open", ["factory:orch-action"], False, None, "Blocked"),
+                      ("closed", ["factory:orch-action"], True, "Blocked", "Shipped")])
         for job, expected in (("Intake", "Building"), ("Build", "Building"),
                               ("Rework", "Building"), ("Review", "In review"),
                               ("Re-review", "In review"), ("Source QA (read-only)", "QA"),
@@ -70,6 +73,29 @@ class DeriveStageTest(unittest.TestCase):
             self.assertEqual(factory_sweep.reconcile_board(
                 [{"n": 45, "labs": ["factory:awaiting-review"]}], {}), 1)
         self.assertEqual([call.args[0] for call in update.call_args_list], [4])
+
+    def test_orchestrator_action_repairs_stage_and_why(self):
+        reason = "orchestrator handling - not Josh"
+        fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2},
+                  "Workflow Stage": {"id": 3, "options": [
+                      {"id": "blocked", "name": {"raw": "Blocked"}}]}}
+        for current, why in (("Human Review Needed", "needs Josh"),
+                             ("Blocked", "needs Josh"), ("Blocked", reason)):
+            item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
+                    "repository": {"nameWithOwner": factory_sweep.R}},
+                    "stage": {"name": current}, "why": {"text": why}}
+            with self.subTest(current=current, why=why), \
+                 patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                 patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
+                 patch.object(factory_sweep, "board_items", return_value=[item]), \
+                 patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
+                self.assertEqual(factory_sweep.reconcile_board(
+                    [{"n": 45, "labs": ["factory:orch-action", "factory:needs-you"]}],
+                    {45: "2026-09-23T00:00:00Z"}, {45: "Review"}), int(why != reason))
+            updates = [field for call in api.call_args_list for field in call.args[2]["fields"]]
+            self.assertEqual(updates, ([{"id": 3, "value": "blocked"}]
+                                      if current != "Blocked" else []) +
+                             ([{"id": 2, "value": reason}] if why != reason else []))
 
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")
