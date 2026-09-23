@@ -119,6 +119,10 @@ def reconcile_board(issues=None, running=None, jobs=None):
                 {"name": "Running For", "data_type": "text"})
         for item in board_items(project):
             issue = item.get("content") or {}
+            repo = issue.get("repository", {}).get("nameWithOwner")
+            if project == 3 and repo != "Cubatica/fitness-coach":
+                print(f"board-drift: foreign item {repo} #{issue.get('number')} on fitness-only project 3; skipped")
+                continue
             if issue.get("repository", {}).get("nameWithOwner") != R:
                 continue
             n = issue["number"]
