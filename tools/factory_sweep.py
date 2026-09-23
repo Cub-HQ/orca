@@ -124,7 +124,7 @@ def snapshot():
 def board_items(number):
     fields = board_sync.project_fields(number)
     ids = ",".join(str(fields[name]["id"]) for name in
-                   ("Workflow Stage", "Why Awaiting Human", "Running For") if name in fields)
+                   ("Workflow Stage", "Why Awaiting Human", "Running For", "Shipped At") if name in fields)
     for item in board_sync.pages(
             f"users/{board_sync.OWNER}/projectsV2/{number}/items?per_page=100&fields={ids}"):
         issue = item.get("content") or {}
@@ -136,7 +136,10 @@ def board_items(number):
                "stage": {"name": values.get("Workflow Stage", {}).get("name", {}).get("raw")},
                "why": {"text": values.get("Why Awaiting Human", {}).get("raw")},
                "running_for": {"text": values.get("Running For", {}).get("raw")},
+               "shipped_at": values.get("Shipped At", {}).get("raw"),
                "content": {"number": issue["number"], "state": issue["state"].upper(),
+                           "closed_at": issue.get("closed_at"),
+                           "url": issue.get("url") or f"{issue['repository_url']}/issues/{issue['number']}",
                            "repository": {"nameWithOwner": issue["repository_url"].split("/repos/", 1)[-1]}}}
 
 
@@ -181,9 +184,13 @@ def reconcile_board(issues=None, running=None, jobs=None):
             clear_why = bool(current_why) and desired_why is None and (stage not in {"Human Review Needed", "Blocked"}
                          or (current_why.startswith("Blocked by: ") and desired_why is None))
             set_why = desired_why is not None and current_why != desired_why
-            if (stage != current or clear_why or set_why) and corrections < 30:
+            shipped_at = None
+            if stage == "Shipped" and "Shipped At" in fields and not item.get("shipped_at") and corrections < 30:
+                shipped_at = board_sync.first_ship_date(issue)
+            if (stage != current or clear_why or set_why or shipped_at) and corrections < 30:
                 board_sync.update_item(project, item["databaseId"],
-                                       stage if stage != current else None, clear_why=clear_why)
+                                       stage if stage != current else None, clear_why=clear_why,
+                                       shipped_at=shipped_at)
                 if set_why:
                     board_sync.api(
                         f"users/{board_sync.OWNER}/projectsV2/{project}/items/{item['databaseId']}",

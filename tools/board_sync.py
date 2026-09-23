@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Set Stage + Run on the Cubatica project boards for one issue."""
 import argparse, functools, json, re, subprocess, sys, time
+from datetime import datetime, timezone
 
 PROJECTS = (3, 4)  # users/Cubatica projects: Fitness Coach Factory, All Projects
 OWNER = "Cubatica"
@@ -49,7 +50,7 @@ def project_fields(number):
         f"users/{OWNER}/projectsV2/{number}/fields?per_page=30")}
 
 
-def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, running_for=None):
+def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, running_for=None, shipped_at=None):
     """Update an existing item without querying or adding any board items."""
     path = f"users/{OWNER}/projectsV2/{number}"
     fields = project_fields(number)
@@ -69,17 +70,46 @@ def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, r
         updates.append({"id": fields["Why Awaiting Human"]["id"], "value": None})
     if running_for is not None:
         updates.append({"id": fields["Running For"]["id"], "value": running_for or None})
+    if shipped_at is not None and "Shipped At" in fields:
+        updates.append({"id": fields["Shipped At"]["id"], "value": shipped_at})
     if updates:
         api(f"{path}/items/{item_id}", "PATCH", {"fields": updates})
 
 
+def first_ship_date(issue, existing=None):
+    """Keep the original ship date, including when an issue is reopened."""
+    if existing:
+        return None
+    closed = issue.get("closed_at")
+    if not closed and issue.get("state", "").lower() == "closed":
+        path = issue["url"].split("api.github.com/", 1)[-1]
+        issue, _ = api(path)
+        closed = issue.get("closed_at")
+        if not closed:
+            merged = []
+            for event in pages(f"{path}/timeline?per_page=100"):
+                source = (event.get("source") or {}).get("issue") or {}
+                pull = source.get("pull_request") or {}
+                if pull.get("url"):
+                    pr, _ = api(pull["url"])
+                    if pr.get("merged_at"):
+                        merged.append(pr["merged_at"])
+            closed = min(merged) if merged else None
+    return (closed or datetime.now(timezone.utc).isoformat())[:10]
+
+
 def sync_project(number, issue, stage_name, run_url):
     path = f"users/{OWNER}/projectsV2/{number}"
-    item = next((i for i in pages(f"{path}/items?per_page=100")
+    date_field = project_fields(number).get("Shipped At")
+    selected = f"&fields={date_field['id']}" if date_field else ""
+    item = next((i for i in pages(f"{path}/items?per_page=100{selected}")
                  if (i.get("content") or {}).get("url") == issue["url"]), None)
     if item is None:
         item, _ = api(f"{path}/items", "POST", {"type": "Issue", "id": issue["id"]})
-    update_item(number, item["id"], stage_name, run_url)
+    existing = next(((field.get("value") or {}).get("raw") for field in item.get("fields", [])
+                     if field["name"] == "Shipped At"), None)
+    date = first_ship_date(issue, existing) if stage_name == "Shipped" and date_field else None
+    update_item(number, item["id"], stage_name, run_url, shipped_at=date)
 
 
 def main():

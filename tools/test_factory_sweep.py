@@ -253,6 +253,62 @@ class DeriveStageTest(unittest.TestCase):
         self.assertEqual(api.call_args.args[2]["fields"], [
             {"id": 1, "value": "triage"}, {"id": 2, "value": "▓░░░░░░░░░░ 1/11"}])
 
+    def test_ship_date_transition_backfill_and_reopen(self):
+        board = factory_sweep.board_sync
+        fields = {"Running For": {"id": 1}, "Shipped At": {"id": 2},
+                  "Workflow Stage": {"id": 3, "options": [
+                      {"id": stage, "name": {"raw": stage}} for stage in ("Shipped", "Queued")]}}
+        issue = {"number": 45, "state": "closed", "closed_at": "2026-09-20T12:00:00Z",
+                 "url": f"https://api.github.com/repos/{factory_sweep.R}/issues/45",
+                 "repository_url": f"https://api.github.com/repos/{factory_sweep.R}"}
+        for current in ("Building", "Shipped"):
+            with self.subTest(current=current):
+                row = {"id": 45, "content_type": "Issue", "content": dict(issue), "fields": [
+                    {"name": "Workflow Stage", "value": {"name": {"raw": current}}}]}
+                def persist(path, method, body):
+                    for update in body["fields"]:
+                        if update["id"] == 2:
+                            row["fields"].append({"name": "Shipped At", "value": {"raw": update["value"]}})
+                        if update["id"] == 3:
+                            row["fields"][0]["value"]["name"]["raw"] = update["value"]
+                with patch.object(board, "PROJECTS", (4,)), \
+                     patch.object(board, "project_fields", return_value=fields), \
+                     patch.object(board, "pages", return_value=[row]) as pages, \
+                     patch.object(board, "api", side_effect=persist) as api, patch("builtins.print"):
+                    self.assertEqual(factory_sweep.reconcile_board([], {}), 1)
+                    self.assertIn({"id": 2, "value": "2026-09-20"}, api.call_args.args[2]["fields"])
+                    self.assertIn("fields=3,1,2", pages.call_args.args[0])
+                    api.reset_mock()
+                    self.assertEqual(factory_sweep.reconcile_board([], {}), 0)
+                    api.assert_not_called()
+                    row["content"]["state"] = "open"
+                    factory_sweep.reconcile_board([{"n": 45, "labs": []}], {})
+                    self.assertNotIn(2, [f["id"] for f in api.call_args.args[2]["fields"]])
+                    api.reset_mock()
+                    row["fields"] = row["fields"][:1]
+                    factory_sweep.reconcile_board([{"n": 45, "labs": []}], {})
+                    api.assert_not_called()
+
+        for stage, existing, expected in (("Shipped", None, "2026-09-20"),
+                ("Shipped", "2026-09-19", None), ("Queued", None, None), ("Queued", "2026-09-19", None)):
+            row = {"id": 45, "content": issue, "fields": [
+                {"name": "Shipped At", "value": {"raw": existing}}]}
+            with self.subTest(stage=stage, existing=existing), \
+                 patch.object(board, "project_fields", return_value=fields), \
+                 patch.object(board, "pages", return_value=[row]), \
+                 patch.object(board, "api") as api:
+                board.sync_project(4, issue, stage, "")
+            dates = [f["value"] for f in api.call_args.args[2]["fields"] if f["id"] == 2]
+            self.assertEqual(dates, [expected] if expected else [])
+
+    def test_ship_date_missing_close_uses_merged_pull(self):
+        board = factory_sweep.board_sync
+        issue = {"state": "closed", "url": "https://api.github.com/repos/Cubatica/orca/issues/45"}
+        with patch.object(board, "pages", return_value=[{"source": {"issue": {
+                "pull_request": {"url": "https://api.github.com/repos/Cubatica/orca/pulls/46"}}}}]), \
+             patch.object(board, "api", side_effect=[(issue, None), ({"merged_at": "2026-09-18T13:00:00Z"}, None)]):
+            self.assertEqual(board.first_ship_date(issue), "2026-09-18")
+
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")
         self.assertEqual(format_elapsed(3661.9), "01:01:01")
