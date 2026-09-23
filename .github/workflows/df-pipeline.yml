@@ -68,7 +68,7 @@ jobs:
           sparse-checkout: tools/board_sync.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - name: Set board stage to Building
+      - name: Set board stage to Triage
         continue-on-error: true
         working-directory: board-stage
         env:
@@ -76,7 +76,7 @@ jobs:
           R: ${{ github.repository }}
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
-          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Building" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Triage" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: "What we're fixing"
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -182,6 +182,7 @@ jobs:
           Judge readiness and lane: can a builder implement this without guessing? It needs (1) a clear defect or feature, (2) an explicit testable Done-when, (3) everything referenced actually reachable in this repo.
           Fast-lane classification (fail safe): choose ORCH_DIRECT only when ALL are proven: one obvious surface; no schema, auth/security, money, or deploy/lifecycle changes; estimated diff in exactly one file; an explicit runnable proof command; can be completed in under 10 minutes. Anything uncertain, broad, risky, or missing evidence is FACTORY. If all hold put FAST_LANE=orch-direct on its own line before INTAKE=go; otherwise FAST_LANE=factory. Include the exact target file and proof command in the hand-off. Never apply labels yourself; the workflow owns routing.
           Post ONE comment on issue #$ISSUE starting '## DF_Intake':
+          - Immediately below the ## DF_Intake header, put a four-line triage receipt before all detailed reasoning: "## Triage", "What: <what this issue is, one plain sentence>", "Lane: <factory full pipeline / orch-direct small fix / needs info from Josh> - <why, one short sentence>", "Next: <what happens automatically; if waiting, the exact answer needed from Josh>". Match the lane to your final FAST_LANE/INTAKE decision. Keep this summary to four lines, write in Josh's plain voice, and post it only when classification is finished; it is part of this ONE comment, not a second comment.
           - Start with a section '### What we are fixing and why': 2-4 short sentences in plain words - what is broken or missing today, why fixing it matters to Josh (what it unblocks or stops annoying), then on its own line: 'Issue: https://github.com/$R/issues/$ISSUE'.
           - Either way, show your reasoning as a 3-line checklist, one per criterion: 'Defect clear: YES/NO - <why>', 'Done-when testable: YES/NO - <why>', 'References reachable: YES/NO - <why>'.
           - Family check: if the issue text or its comments say this came from, was split out of, is a follow-up to, or is one phase of another issue (e.g. 'from #152', 'follow-up to the PRD'), link it as a child of that parent: PID=$(gh api repos/$R/issues/<child> --jq .id) then gh api -X POST repos/$R/issues/<parent>/sub_issues -F sub_issue_id=$PID (numeric .id, never the issue number). If it names no parent, skip this - never guess a family.
