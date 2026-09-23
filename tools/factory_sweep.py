@@ -11,6 +11,7 @@ import re
 import subprocess
 import board_sync
 import time
+from datetime import datetime
 
 R = "Cubatica/orca"
 WAIT = {"actions:needs-info", "factory:needs-info", "actions:parked",
@@ -39,20 +40,33 @@ def derive_stage(state, labels, running, current=None):
     return "Queued"
 
 
+def format_elapsed(seconds):
+    hours, remainder = divmod(max(0, int(seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def running_for(stage, run_started_at, now, stage_updated_at=None):
+    if stage not in {"Building", "In review", "QA", "Deploying", "Live test"}:
+        return ""
+    started = run_started_at or stage_updated_at
+    return format_elapsed(now - datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()) if started else "?"
+
+
 def snapshot():
     issues = json.loads(gh(f"repos/{R}/issues?state=open&per_page=100", "--paginate", "--slurp"))
     issues = [{"n": i["number"], "labs": [l["name"] for l in i["labels"]],
                "updated": i["updated_at"]} for page in issues for i in page if "pull_request" not in i]
     runs = json.loads(gh(f"repos/{R}/actions/runs?per_page=100"))["workflow_runs"]
-    active, running = set(), set()
-    for run in runs:
+    active, running = set(), {}
+    for run in sorted(runs, key=lambda r: r.get("run_started_at") or "", reverse=True):
         if run["status"] in {"queued", "in_progress", "pending"}:
             match = re.search(r"#(\d+) ", run.get("display_title") or "")
             if match:
                 n = int(match[1])
                 active.add(n)
                 if run["status"] == "in_progress":
-                    running.add(n)
+                    running.setdefault(n, run.get("run_started_at"))
     return issues, active, running
 
 
@@ -63,9 +77,12 @@ def board_items(number):
           pageInfo { hasNextPage endCursor }
           nodes { databaseId
             stage:fieldValueByName(name:"Workflow Stage") {
-              ... on ProjectV2ItemFieldSingleSelectValue { name }
+              ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt }
             }
             why:fieldValueByName(name:"Why Awaiting Human") {
+              ... on ProjectV2ItemFieldTextValue { text }
+            }
+            running_for:fieldValueByName(name:"Running For") {
               ... on ProjectV2ItemFieldTextValue { text }
             }
             content { ... on Issue { number state repository { nameWithOwner } } }
@@ -90,8 +107,14 @@ def reconcile_board(issues=None, running=None):
     if issues is None:
         issues, _, running = snapshot()
     labels = {i["n"]: i["labs"] for i in issues}
-    corrections = 0
+    corrections = refreshes = 0
+    now = time.time()
     for project in board_sync.PROJECTS:
+        fields = board_sync.project_fields(project)
+        if "Running For" not in fields:
+            fields["Running For"], _ = board_sync.api(
+                f"users/{board_sync.OWNER}/projectsV2/{project}/fields", "POST",
+                {"name": "Running For", "data_type": "text"})
         for item in board_items(project):
             issue = item.get("content") or {}
             if issue.get("repository", {}).get("nameWithOwner") != R:
@@ -103,17 +126,24 @@ def reconcile_board(issues=None, running=None):
             stage = derive_stage(issue["state"], labels.get(n, []), n in running, current)
             clear_why = bool((item.get("why") or {}).get("text")) and stage not in {
                 "Human Review Needed", "Blocked"}
-            if stage == current and not clear_why:
-                continue
-            if corrections == 30:
-                print("board-drift: correction cap 30 reached; remaining drift deferred")
-                return corrections
-            board_sync.update_item(project, item["databaseId"],
-                                   stage if stage != current else None, clear_why=clear_why)
-            corrections += 1
-            print(f"board-drift: #{n} was {current or '(unset)'}, derived {stage}"
-                  f" (project {project}" + ("; cleared Why" if clear_why else "") + ")")
+            if (stage != current or clear_why) and corrections < 30:
+                board_sync.update_item(project, item["databaseId"],
+                                       stage if stage != current else None, clear_why=clear_why)
+                corrections += 1
+                print(f"board-drift: #{n} was {current or '(unset)'}, derived {stage}"
+                      f" (project {project}" + ("; cleared Why" if clear_why else "") + ")")
+                if corrections == 30:
+                    print("board-drift: correction cap 30 reached; remaining drift deferred")
+            duration = running_for(stage, running.get(n), now,
+                                   (item.get("stage") or {}).get("updatedAt") if stage == current else None)
+            if duration != ((item.get("running_for") or {}).get("text") or "") and refreshes < 100:
+                board_sync.update_item(project, item["databaseId"], running_for=duration)
+                refreshes += 1
+                print(f"board-duration: #{n} -> {duration or '(empty)'} (project {project})")
+                if refreshes == 100:
+                    print("board-duration: refresh cap 100 reached; remaining durations deferred")
     print(f"board-drift: {corrections} corrections")
+    print(f"board-duration: {refreshes} refreshes")
     return corrections
 
 
