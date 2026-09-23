@@ -27,7 +27,7 @@ def gh(*args):
     return r.stdout
 
 
-def derive_stage(state, labels, running, current=None, job=None, blocked_by=()):
+def derive_stage(state, labels, running, current=None, job=None, blocked_by=(), triaged=False):
     """Human gates beat live jobs; only a live run may preserve a finer stage."""
     if state.lower() == "closed":
         return "Shipped"
@@ -42,7 +42,9 @@ def derive_stage(state, labels, running, current=None, job=None, blocked_by=()):
     if "factory:orch-direct" in labels:
         return "Building"
     if running:
-        if job in {"Intake", "Build", "Rework"}:
+        if job in {"Admission", "Intake"}:
+            return "Triage"
+        if job in {"Build", "Rework"}:
             return "Building"
         if job in {"Review", "Re-review"}:
             return "In review"
@@ -55,6 +57,8 @@ def derive_stage(state, labels, running, current=None, job=None, blocked_by=()):
         if job == "Verdict" and current:
             return current
         return current if current in {"In review", "QA", "Deploying", "Live test"} else "Building"
+    if "actions:go" in labels and not triaged:
+        return "Triage"
     return "Queued"
 
 
@@ -81,20 +85,39 @@ def snapshot():
             "--paginate", "--slurp"))
         issue["blocked_by"] = [blocker for page in pages for blocker in page
                                if blocker["state"].lower() == "open"]
-    runs = json.loads(gh(f"repos/{R}/actions/runs?per_page=100"))["workflow_runs"]
+    pages = json.loads(gh(f"repos/{R}/actions/runs?per_page=100", "--paginate", "--slurp"))
+    runs = [run for page in pages for run in page["workflow_runs"]]
+    by_number = {issue["n"]: issue for issue in issues}
     active, running, jobs = set(), {}, {}
     for run in sorted(runs, key=lambda r: r.get("run_started_at") or "", reverse=True):
-        if run["status"] in {"queued", "in_progress", "pending"}:
-            match = re.search(r"#(\d+) ", run.get("display_title") or "")
-            if match:
-                n = int(match[1])
-                active.add(n)
-                if run["status"] == "in_progress" and n not in running:
-                    running[n] = run.get("run_started_at")
-                    pages = json.loads(gh(f"repos/{R}/actions/runs/{run['id']}/jobs?per_page=100",
-                                          "--paginate", "--slurp"))
-                    jobs[n] = next((job["name"] for page in pages for job in page["jobs"]
-                                    if job["status"] == "in_progress"), None)
+        match = re.search(r"#(\d+) ", run.get("display_title") or "")
+        if not match or int(match[1]) not in by_number:
+            continue
+        n = int(match[1])
+        issue = by_number[n]
+        if run["status"] in {"queued", "in_progress", "pending", "waiting", "requested"}:
+            active.add(n)
+        if run["status"] not in {"in_progress", "completed"}:
+            continue  # queued runs can have run_started_at without ever starting a job
+        if issue.get("triaged") and (run["status"] != "in_progress" or n in running):
+            continue
+        pages = json.loads(gh(f"repos/{R}/actions/runs/{run['id']}/jobs?filter=all&per_page=100",
+                              "--paginate", "--slurp"))
+        run_jobs = [job for page in pages for job in page["jobs"]]
+        if any(job.get("started_at") and job["status"] != "queued"
+               and job.get("conclusion") != "skipped" for job in run_jobs):
+            issue["triaged"] = True
+        if run["status"] == "in_progress" and n not in running:
+            job = next((job for job in run_jobs if job["status"] == "in_progress"), None)
+            if job:
+                running[n] = job.get("started_at") or run.get("run_started_at")
+                jobs[n] = job["name"]
+    for issue in issues:
+        if "actions:go" in issue["labs"] and not issue.get("triaged"):
+            pages = json.loads(gh(f"repos/{R}/issues/{issue['n']}/comments?per_page=100",
+                                  "--paginate", "--slurp"))
+            issue["triaged"] = any((comment.get("body") or "").startswith("## DF_Intake")
+                                   for page in pages for comment in page)
     return issues, active, running, jobs
 
 
@@ -122,6 +145,7 @@ def reconcile_board(issues=None, running=None, jobs=None):
         issues, _, running, jobs = snapshot()
     labels = {i["n"]: i["labs"] for i in issues}
     blockers = {i["n"]: i.get("blocked_by", []) for i in issues}
+    triaged = {i["n"]: i.get("triaged", False) for i in issues}
     corrections = refreshes = 0
     now = time.time()
     for project in board_sync.PROJECTS:
@@ -143,7 +167,7 @@ def reconcile_board(issues=None, running=None, jobs=None):
                 continue  # opened after the REST snapshot; reconcile next sweep
             current = (item.get("stage") or {}).get("name")
             stage = derive_stage(issue["state"], labels.get(n, []), n in running, current,
-                                 (jobs or {}).get(n), blockers.get(n, []))
+                                 (jobs or {}).get(n), blockers.get(n, []), triaged.get(n, False))
             current_why = (item.get("why") or {}).get("text") or ""
             desired_why = None
             if stage == "Blocked":

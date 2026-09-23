@@ -12,7 +12,7 @@ def projects_for(repo):
 
 # Current pipeline stage number shown when an issue is at each board stage (11 total:
 # intake build review rework re-review qa rebase merge deploy live-test verdict)
-STEPS_DONE = {"Queued": 0, "Building": 2, "In review": 3, "QA": 6, "Deploying": 9, "Live test": 10, "Shipped": 11}
+STEPS_DONE = {"Queued": 0, "Triage": 1, "Building": 2, "In review": 3, "QA": 6, "Deploying": 9, "Live test": 10, "Shipped": 11}
 TOTAL = 11
 
 

@@ -18,7 +18,7 @@ class DeriveStageTest(unittest.TestCase):
             ("open", ["factory:blocked"], True, "Live test", "Blocked"),
             ("open", [], True, None, "Building"),
             ("open", [], True, "Human Review Needed", "Building"),
-            ("open", ["actions:go"], False, "Building", "Queued"),
+            ("open", ["actions:go"], False, "Building", "Triage"),
             ("open", [], False, None, "Queued"),
             ("open", [], False, "Human Review Needed", "Queued"),
         ]
@@ -31,7 +31,7 @@ class DeriveStageTest(unittest.TestCase):
             cases.append(("open", [label, "factory:orch-action"], True, "QA", "Blocked"))
         cases.extend([("open", ["factory:orch-action"], False, None, "Blocked"),
                       ("closed", ["factory:orch-action"], True, "Blocked", "Shipped")])
-        for job, expected in (("Intake", "Building"), ("Build", "Building"),
+        for job, expected in (("Admission", "Triage"), ("Intake", "Triage"), ("Build", "Building"),
                               ("Rework", "Building"), ("Review", "In review"),
                               ("Re-review", "In review"), ("Source QA (read-only)", "QA"),
                               ("Rebase", "Deploying"), ("Merge PR", "Deploying"),
@@ -138,7 +138,7 @@ class DeriveStageTest(unittest.TestCase):
             with self.subTest(dependencies=dependencies, labels=labels):
                 replies = [json.dumps([[{"number": 45, "labels": [{"name": x} for x in labels],
                                         "updated_at": "2026-09-23T00:00:00Z"}]]),
-                           json.dumps(dependencies), json.dumps({"workflow_runs": []})]
+                           json.dumps(dependencies), json.dumps([{"workflow_runs": []}])]
                 with patch.object(factory_sweep, "gh", side_effect=replies):
                     issues, _, running, jobs = factory_sweep.snapshot()
                 item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
@@ -154,6 +154,66 @@ class DeriveStageTest(unittest.TestCase):
                 self.assertEqual(updates, [{"id": 3, "value": expected},
                     {"id": 2, "value": ("Blocked by: " + blocker["html_url"] + " — " + blocker["title"])
                      if expected == "Blocked" else None}])
+
+    def test_triage_snapshot_reconciles_real_evidence(self):
+        started = "2026-09-23T00:00:00Z"
+        cases = [
+            ("new", [], [], [], [], "Triage"),
+            ("queued timestamp is not started", ["queued"], [], [], [], "Triage"),
+            ("pending timestamp is not started", ["pending"], [], [], [], "Triage"),
+            ("skipped run", ["completed"], [("Intake", "completed", "skipped")], [], [], "Triage"),
+            ("intake", ["in_progress"], [("Intake", "in_progress", None)], [], [], "Triage"),
+            ("build", ["in_progress"], [("Build", "in_progress", None)], [], [], "Building"),
+            ("waiting for runner", ["in_progress"], [("Build", "queued", None)], ["## DF_Intake\nINTAKE=go"], [], "Queued"),
+            ("old run then requeued", ["queued", "completed"], [("Intake", "completed", "success")], [], [], "Queued"),
+            ("old receipt", [], [], ["## DF_Intake\nINTAKE=go"], [], "Queued"),
+            ("receipt mention is not receipt", [], [], ["Waiting for ## DF_Intake"], [], "Triage"),
+            ("human precedence", ["in_progress"], [("Intake", "in_progress", None)], [], ["factory:needs-you"], "Human Review Needed"),
+            ("blocked precedence", [], [], [], ["factory:blocked"], "Blocked"),
+            ("direct precedence", [], [], [], ["factory:orch-direct"], "Building"),
+        ]
+        for name, statuses, job_rows, comments, labels, expected in cases:
+            with self.subTest(name=name):
+                def github(path, *args):
+                    self.assertEqual(args, ("--paginate", "--slurp"))
+                    if "/dependencies/blocked_by?" in path:
+                        return json.dumps([[]])
+                    if "/comments?" in path:
+                        return json.dumps([[{"body": "unrelated"}], [{"body": body} for body in comments]])
+                    if "/jobs?" in path:
+                        return json.dumps([{"jobs": []}, {"jobs": [
+                            {"name": job, "status": status, "conclusion": conclusion,
+                             "started_at": None if status == "queued" else started}
+                            for job, status, conclusion in job_rows]}])
+                    if "/actions/runs?" in path:
+                        return json.dumps([{"workflow_runs": []}] + [{"workflow_runs": [
+                            {"id": index, "display_title": "#45 issue", "status": status,
+                             "run_started_at": started}]} for index, status in enumerate(statuses)])
+                    self.assertIn("/issues?state=open", path)
+                    return json.dumps([[{"number": 45, "updated_at": started,
+                                         "labels": [{"name": label} for label in ["actions:go"] + labels]}]])
+
+                item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
+                        "repository": {"nameWithOwner": factory_sweep.R}}, "stage": {"name": "(unset)"}}
+                with patch.object(factory_sweep, "gh", side_effect=github), \
+                     patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                     patch.object(factory_sweep.board_sync, "project_fields", return_value={
+                         "Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}), \
+                     patch.object(factory_sweep, "board_items", return_value=[item]), \
+                     patch.object(factory_sweep.board_sync, "update_item") as update, \
+                     patch.object(factory_sweep.board_sync, "api"), patch("builtins.print"):
+                    self.assertEqual(factory_sweep.reconcile_board(), 1)
+                self.assertEqual(update.call_args_list[0].args[2], expected)
+
+    def test_triage_resets_board_progress(self):
+        board = factory_sweep.board_sync
+        fields = {"Workflow Stage": {"id": 1, "options": [
+            {"id": "triage", "name": {"raw": "Triage"}}]}, "Workflow Progress": {"id": 2}}
+        with patch.object(board, "project_fields", return_value=fields), \
+             patch.object(board, "api") as api:
+            board.update_item(4, 45, "Triage")
+        self.assertEqual(api.call_args.args[2]["fields"], [
+            {"id": 1, "value": "triage"}, {"id": 2, "value": "▓░░░░░░░░░░ 1/11"}])
 
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")
