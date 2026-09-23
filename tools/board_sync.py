@@ -45,7 +45,7 @@ def project_fields(number):
         f"users/{OWNER}/projectsV2/{number}/fields?per_page=30")}
 
 
-def update_item(number, item_id, stage_name=None, run_url="", clear_why=False):
+def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, running_for=None):
     """Update an existing item without querying or adding any board items."""
     path = f"users/{OWNER}/projectsV2/{number}"
     fields = project_fields(number)
@@ -63,6 +63,8 @@ def update_item(number, item_id, stage_name=None, run_url="", clear_why=False):
         updates.append({"id": fields["Workflow Progress"]["id"], "value": bar})
     if clear_why and "Why Awaiting Human" in fields:
         updates.append({"id": fields["Why Awaiting Human"]["id"], "value": None})
+    if running_for is not None:
+        updates.append({"id": fields["Running For"]["id"], "value": running_for or None})
     if updates:
         api(f"{path}/items/{item_id}", "PATCH", {"fields": updates})
 
