@@ -171,3 +171,7 @@ Independence means independently reading the diff and checking its claim, not re
    for the pattern is inside your budget. Fix present but enumeration missing or siblings left
    unfixed with no reason = blocking finding: "symptom patch - class not swept".
 </independence>
+
+## Stable finding receipts
+
+Every blocker has `FINDING_ID=path::symbol::invariant`; preserve it across cycles. Re-review only unresolved IDs, adding a new blocker only with new concrete evidence. For each ID cite RESOLVED/OPEN plus commit and executed proof. An unchanged blocked HEAD ends the repeat without another whole review. Keep `HEAD_SHA=` and the final `DF_REVIEW=approve|block` line exact.

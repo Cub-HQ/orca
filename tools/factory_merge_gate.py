@@ -158,9 +158,10 @@ def main():
             raise SystemExit(1)
     elif repo in ('orca', 'df-fixture'):
         if rows:
-            raise ValueError('pnpm exclusions require runner-native exact-ID support; none currently proven')
-        command(['pnpm', 'run', 'typecheck'])
-        command(['pnpm', 'test'])
+            raise ValueError('package test exclusions require runner-native exact-ID support; none currently proven')
+        manager = 'npm' if repo == 'df-fixture' else 'pnpm'
+        command([manager, 'run', 'typecheck'])
+        command([manager, 'test'])
     elif repo == 'omp-config-backup':
         if rows:
             raise ValueError('no known environment exclusions for script gates')
