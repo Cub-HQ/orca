@@ -31,6 +31,8 @@ jobs:
           echo "go=false" >> "$GITHUB_OUTPUT"
           ISSUE_JSON=$(gh api "repos/$R/issues/$ISSUE")
           if [ "$(jq -r .state <<< "$ISSUE_JSON")" != open ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/tools/closure_epitaph.py?ref=main" > "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" || exit 1
+            python3 "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" --repo "$R" --issue "$ISSUE" || exit 1
             echo "Skipped: issue is closed."
             exit 0
           fi
@@ -183,7 +185,7 @@ jobs:
           Fast-lane classification (fail safe): choose ORCH_DIRECT only when ALL are proven: one obvious surface; no schema, auth/security, money, or deploy/lifecycle changes; estimated diff in exactly one file; an explicit runnable proof command; can be completed in under 10 minutes. Anything uncertain, broad, risky, or missing evidence is FACTORY. If all hold put FAST_LANE=orch-direct on its own line before INTAKE=go; otherwise FAST_LANE=factory. Include the exact target file and proof command in the hand-off. Never apply labels yourself; the workflow owns routing.
           Post ONE comment on issue #$ISSUE starting '## DF_Intake':
           - Immediately below the ## DF_Intake header, put a four-line triage receipt before all detailed reasoning: "## Triage", "What: <what this issue is, one plain sentence>", "Lane: <factory full pipeline / orch-direct small fix / needs info from Josh> - <why, one short sentence>", "Next: <what happens automatically; if waiting, the exact answer needed from Josh>". Match the lane to your final FAST_LANE/INTAKE decision. Keep this summary to four lines, write in Josh's plain voice, and post it only when classification is finished; it is part of this ONE comment, not a second comment.
-          - Start with a section '### What we are fixing and why': 2-4 short sentences in plain words - what is broken or missing today, why fixing it matters to Josh (what it unblocks or stops annoying), then on its own line: 'Issue: https://github.com/$R/issues/$ISSUE'.
+          - Follow the triage receipt with a section '### What we are fixing and why': 2-4 short sentences in plain words - what is broken or missing today, why fixing it matters to Josh (what it unblocks or stops annoying), then on its own line: 'Issue: https://github.com/$R/issues/$ISSUE'.
           - Either way, show your reasoning as a 3-line checklist, one per criterion: 'Defect clear: YES/NO - <why>', 'Done-when testable: YES/NO - <why>', 'References reachable: YES/NO - <why>'.
           - Family check: if the issue text or its comments say this came from, was split out of, is a follow-up to, or is one phase of another issue (e.g. 'from #152', 'follow-up to the PRD'), link it as a child of that parent: PID=$(gh api repos/$R/issues/<child> --jq .id) then gh api -X POST repos/$R/issues/<parent>/sub_issues -F sub_issue_id=$PID (numeric .id, never the issue number). If it names no parent, skip this - never guess a family.
           - If all YES: add a section '**Hand-off package (exactly what the builder gets)**' with 3 short bullets: What is broken, What done looks like, Where to look (files). This comment on the issue IS the data passed to the Build stage - the builder reads the issue plus its comments. LAST line exactly INTAKE=go
@@ -929,6 +931,11 @@ jobs:
           R: ${{ github.repository }}
         run: |
           export PATH="/Users/joshuabretag/.local/npm-global/bin:/opt/homebrew/bin:$PATH"
+          if [ "$(gh api "repos/$R/issues/$ISSUE" --jq .state)" = closed ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/tools/closure_epitaph.py?ref=main" > "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" || exit 1
+            python3 "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" --repo "$R" --issue "$ISSUE" || exit 1
+            exit 0
+          fi
           for L in "actions:parked|b60205" "actions:needs-info|fbca04" "actions:shipped|0e8a16" "factory:orch-action|d4c5f9" "factory:needs-you|b60205"; do
             gh api -X POST "repos/$R/labels" -f name="${L%%|*}" -f color="${L##*|}" >/dev/null 2>&1 || true
           done
@@ -1022,6 +1029,11 @@ jobs:
           RB: ${{ needs.rebase.result }}
         run: |
           export PATH="/opt/homebrew/bin:$PATH"
+          if [ "$(gh api "repos/$R/issues/$ISSUE" --jq .state)" = closed ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/tools/closure_epitaph.py?ref=main" > "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" || exit 1
+            python3 "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" --repo "$R" --issue "$ISSUE" || exit 1
+            exit 0
+          fi
           T=$(gh api "repos/$R/issues/$ISSUE" --jq .title)
           BODY=$(gh api "repos/$R/issues/$ISSUE" --jq '.body // ""' | awk 'NF==0 && n>400 {exit} {print; n+=length($0)}' | head -c 2000)
           QAB=$(gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("## DF_QA"))] | last | .body' 2>/dev/null || true)
@@ -1236,3 +1248,12 @@ jobs:
               except (OSError, ValueError, KeyError, TypeError):
                   pass  # Retain is best effort, never a release gate.
           PY
+      - name: Leave the closed-issue ending last
+        if: always()
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$R/contents/tools/closure_epitaph.py?ref=main" > "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" || exit 1
+          python3 "$RUNNER_TEMP/closure-epitaph-$GITHUB_RUN_ID.py" --repo "$R" --issue "$ISSUE"
