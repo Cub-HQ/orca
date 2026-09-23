@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 
-TRACKER = "repos/Cubatica/omp-config-backup/issues/123/comments"
+TRACKER = "repos/Cub-HQ/omp-config-backup/issues/123/comments"
 PREFIX = "<!-- factory-runner-watch "
 SAFE = {"Admission", "Merge", "Merge (not shipped)", "Verdict"}
 
@@ -82,7 +82,7 @@ def block_board(repo, issue, url, reason):
             fields = board_sync.project_fields(project)
             why = fields.get("Why Awaiting Human")
             if why:
-                root = f"users/{board_sync.OWNER}/projectsV2/{project}"
+                root = f"orgs/{board_sync.OWNER}/projectsV2/{project}"
                 item = next(i for i in board_sync.pages(root + "/items?per_page=100")
                             if (i.get("content") or {}).get("url") == issue["url"])
                 board_sync.api(f"{root}/items/{item['id']}", "PATCH",
@@ -205,9 +205,9 @@ def self_test():
     assert not list(records([{"body": PREFIX + '{"key":"spoof"} -->', "author_association": "NONE"}]))
 
     def replay(selected_job, confirm=True, available=(), alert=True):
-        issue = {"number": 8, "id": 80, "state": "open", "url": "https://api.github.com/repos/Cubatica/demo/issues/8"}
+        issue = {"number": 8, "id": 80, "state": "open", "url": "https://api.github.com/repos/Cub-HQ/demo/issues/8"}
         run = {"id": 10, "workflow_id": 7, "display_title": "#8 demo", "head_branch": "main",
-               "html_url": "https://github.com/Cubatica/demo/actions/runs/10", "status": "queued"}
+               "html_url": "https://github.com/Cub-HQ/demo/actions/runs/10", "status": "queued"}
         stored, notices, calls, boards = [], [], [], []
         def fake(path, method="GET", data=None, pages=False):
             calls.append((path, method, data))
@@ -250,7 +250,7 @@ def self_test():
                 return None
             raise AssertionError(path)
         for _ in range(2):
-            watch("Cubatica/demo", fake, lambda *args: boards.append(args), now)
+            watch("Cub-HQ/demo", fake, lambda *args: boards.append(args), now)
         dispatches = [c for c in calls if c[0].endswith("/dispatches")]
         if not alert:
             assert not stored and not notices and not boards and not dispatches
@@ -274,7 +274,7 @@ def self_test():
     import types
     board_calls = []
     stub = types.SimpleNamespace(
-        OWNER="Cubatica", projects_for=lambda repo: (4,),
+        OWNER="Cub-HQ", projects_for=lambda repo: (2,),
         sync_project=lambda *args: board_calls.append(args),
         project_fields=lambda project: {"Why Awaiting Human": {"id": 42}},
         pages=lambda path: [{"id": 90, "content": {"url": "issue-url"}}],
@@ -282,14 +282,14 @@ def self_test():
     previous = sys.modules.get("board_sync")
     sys.modules["board_sync"] = stub
     try:
-        block_board("Cubatica/demo", {"url": "issue-url"}, "run-url", "zero runners")
+        block_board("Cub-HQ/demo", {"url": "issue-url"}, "run-url", "zero runners")
     finally:
         if previous is None:
             del sys.modules["board_sync"]
         else:
             sys.modules["board_sync"] = previous
     assert board_calls[0][2] == "Blocked"
-    assert board_calls[1] == ("users/Cubatica/projectsV2/4/items/90", "PATCH",
+    assert board_calls[1] == ("orgs/Cub-HQ/projectsV2/2/items/90", "PATCH",
                               {"fields": [{"id": 42, "value": "zero runners"}]})
     print("runner-watch self-test: PASS (hosted/local stall, idle/young/pending exclusion, trusted markers, board+tracker, cancel fence, duplicate replay, live-job no fallback)")
 

@@ -14,7 +14,7 @@ import board_sync
 import time
 from datetime import datetime
 
-R = os.environ.get("GITHUB_REPOSITORY", "Cubatica/omp-config-backup")
+R = os.environ.get("GITHUB_REPOSITORY", "Cub-HQ/omp-config-backup")
 WAIT = {"actions:needs-info", "factory:needs-info", "actions:parked",
         "factory:needs-you", "factory:awaiting-review", "factory:awaiting-merge",
         "factory:awaiting-user-review"}
@@ -127,7 +127,7 @@ def board_items(number):
     ids = ",".join(str(fields[name]["id"]) for name in
                    ("Workflow Stage", "Why Awaiting Human", "Running For", "Shipped At") if name in fields)
     for item in board_sync.pages(
-            f"users/{board_sync.OWNER}/projectsV2/{number}/items?per_page=100&fields={ids}"):
+            f"orgs/{board_sync.OWNER}/projectsV2/{number}/items?per_page=100&fields={ids}"):
         issue = item.get("content") or {}
         if item.get("content_type") != "Issue":
             continue
@@ -156,13 +156,13 @@ def reconcile_board(issues=None, running=None, jobs=None):
         fields = board_sync.project_fields(project)
         if "Running For" not in fields:
             fields["Running For"], _ = board_sync.api(
-                f"users/{board_sync.OWNER}/projectsV2/{project}/fields", "POST",
+                f"orgs/{board_sync.OWNER}/projectsV2/{project}/fields", "POST",
                 {"name": "Running For", "data_type": "text"})
         for item in board_items(project):
             issue = item.get("content") or {}
             repo = issue.get("repository", {}).get("nameWithOwner")
-            if project == 3 and repo != "Cubatica/fitness-coach":
-                print(f"board-drift: foreign item {repo} #{issue.get('number')} on fitness-only project 3; skipped")
+            if project == 1 and repo != "Cub-HQ/fitness-coach":
+                print(f"board-drift: foreign item {repo} #{issue.get('number')} on fitness-only project 1; skipped")
                 continue
             if issue.get("repository", {}).get("nameWithOwner") != R:
                 continue
@@ -194,7 +194,7 @@ def reconcile_board(issues=None, running=None, jobs=None):
                                        shipped_at=shipped_at)
                 if set_why:
                     board_sync.api(
-                        f"users/{board_sync.OWNER}/projectsV2/{project}/items/{item['databaseId']}",
+                        f"orgs/{board_sync.OWNER}/projectsV2/{project}/items/{item['databaseId']}",
                         "PATCH", {"fields": [{"id": fields["Why Awaiting Human"]["id"],
                                               "value": desired_why}]})
                 corrections += 1

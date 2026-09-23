@@ -61,7 +61,7 @@ class DeriveStageTest(unittest.TestCase):
                 "stage": {"name": "Queued"}, "why": {"text": ""},
                 "running_for": {"text": "?"}}
         fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}
-        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+        with patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
              patch.object(factory_sweep, "board_items", return_value=[item]), \
              patch.object(factory_sweep.board_sync, "update_item") as update, \
@@ -79,10 +79,10 @@ class DeriveStageTest(unittest.TestCase):
 
     def test_board_routing(self):
         board = factory_sweep.board_sync
-        for repo, expected in (("fitness-coach", [3, 4]), ("omp-config-backup", [4]),
-                               ("df-fixture", [4]), ("orca", [4])):
+        for repo, expected in (("fitness-coach", [1, 2]), ("omp-config-backup", [2]),
+                               ("df-fixture", [2]), ("orca", [2])):
             with self.subTest(repo=repo), \
-                 patch.object(board.sys, "argv", ["board_sync.py", "--repo", f"Cubatica/{repo}",
+                 patch.object(board.sys, "argv", ["board_sync.py", "--repo", f"Cub-HQ/{repo}",
                                                    "--issue", "45", "--stage", "Human Review Needed"]), \
                  patch.object(board, "api", return_value=({"state": "open"}, None)), \
                  patch.object(board, "sync_project") as sync, patch("builtins.print"):
@@ -91,16 +91,16 @@ class DeriveStageTest(unittest.TestCase):
 
     def test_foreign_item_never_updated_on_fitness_board(self):
         item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
-                "repository": {"nameWithOwner": "Cubatica/omp-config-backup"}},
+                "repository": {"nameWithOwner": "Cub-HQ/omp-config-backup"}},
                 "stage": {"name": "Queued"}}
-        with patch.object(factory_sweep, "R", "Cubatica/omp-config-backup"), \
-             patch.object(factory_sweep.board_sync, "PROJECTS", (3, 4)), \
+        with patch.object(factory_sweep, "R", "Cub-HQ/omp-config-backup"), \
+             patch.object(factory_sweep.board_sync, "PROJECTS", (1, 2)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
              patch.object(factory_sweep, "board_items", return_value=[item]), \
              patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
             self.assertEqual(factory_sweep.reconcile_board(
                 [{"n": 45, "labs": ["factory:awaiting-review"]}], {}), 1)
-        self.assertEqual([call.args[0] for call in update.call_args_list], [4])
+        self.assertEqual([call.args[0] for call in update.call_args_list], [2])
 
     def test_orchestrator_action_repairs_stage_and_why(self):
         reason = "orchestrator handling - not Josh"
@@ -113,7 +113,7 @@ class DeriveStageTest(unittest.TestCase):
                     "repository": {"nameWithOwner": factory_sweep.R}},
                     "stage": {"name": current}, "why": {"text": why}}
             with self.subTest(current=current, why=why), \
-                 patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                 patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
                  patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
                  patch.object(factory_sweep, "board_items", return_value=[item]), \
                  patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
@@ -126,7 +126,7 @@ class DeriveStageTest(unittest.TestCase):
                              ([{"id": 2, "value": reason}] if why != reason else []))
 
     def test_dependency_snapshot_and_board_lifecycle(self):
-        blocker = {"state": "open", "html_url": "https://github.com/Cubatica/orca/issues/7",
+        blocker = {"state": "open", "html_url": "https://github.com/Cub-HQ/orca/issues/7",
                    "title": "Repair release"}
         fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2},
                   "Workflow Stage": {"id": 3, "options": [
@@ -145,7 +145,7 @@ class DeriveStageTest(unittest.TestCase):
                         "repository": {"nameWithOwner": factory_sweep.R}},
                         "stage": {"name": "Human Review Needed" if expected == "Blocked" else "Blocked"},
                         "why": {"text": "Blocked by: old dependency"}}
-                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                with patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
@@ -196,7 +196,7 @@ class DeriveStageTest(unittest.TestCase):
                 item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
                         "repository": {"nameWithOwner": factory_sweep.R}}, "stage": {"name": "(unset)"}}
                 with patch.object(factory_sweep, "gh", side_effect=github), \
-                     patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                     patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value={
                          "Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
@@ -235,7 +235,7 @@ class DeriveStageTest(unittest.TestCase):
                     issues, active, running, jobs = factory_sweep.snapshot()
                 self.assertEqual(active, {31} if queued else set())
                 self.assertEqual(running, {})
-                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                with patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
@@ -274,7 +274,7 @@ class DeriveStageTest(unittest.TestCase):
                             row["fields"].append({"name": "Shipped At", "value": update["value"] + "T00:00:00+00:00"})
                         if update["id"] == 3:
                             row["fields"][0]["value"]["name"]["raw"] = update["value"]
-                with patch.object(board, "PROJECTS", (4,)), \
+                with patch.object(board, "PROJECTS", (2,)), \
                      patch.object(board, "project_fields", return_value=fields), \
                      patch.object(board, "pages", return_value=[row]) as pages, \
                      patch.object(board, "api", side_effect=persist) as api, patch("builtins.print"):
@@ -306,12 +306,12 @@ class DeriveStageTest(unittest.TestCase):
 
     def test_ship_date_missing_close_requires_closing_pull_evidence(self):
         board = factory_sweep.board_sync
-        issue = {"state": "closed", "url": "https://api.github.com/repos/Cubatica/orca/issues/45"}
+        issue = {"state": "closed", "url": "https://api.github.com/repos/Cub-HQ/orca/issues/45"}
         for will_close, closing_commit, expected in ((True, None, "2026-09-18"),
                 (False, "merge", "2026-09-18"), (False, "other", "2026-09-23"),
                 (False, None, "2026-09-23")):
             timeline = [{"will_close_target": will_close, "source": {"issue": {
-                "pull_request": {"url": "https://api.github.com/repos/Cubatica/orca/pulls/46"}}}},
+                "pull_request": {"url": "https://api.github.com/repos/Cub-HQ/orca/pulls/46"}}}},
                 {"event": "closed", "commit_id": closing_commit}]
             with self.subTest(will_close=will_close, closing_commit=closing_commit), \
                  patch.object(board, "pages", return_value=timeline), \
@@ -341,7 +341,7 @@ class DeriveStageTest(unittest.TestCase):
                   "stage": {"name": "Queued"}} for n in range(101)]
         issues = [{"n": n, "labs": []} for n in range(101)]
         running = {n: "2026-09-23T00:00:00Z" for n in range(101)}
-        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+        with patch.object(factory_sweep.board_sync, "PROJECTS", (2,)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
              patch.object(factory_sweep, "board_items", return_value=items), \
              patch.object(factory_sweep.board_sync, "update_item") as update, \

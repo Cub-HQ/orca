@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Set Stage + Run on the Cubatica project boards for one issue."""
+"""Set Stage + Run on the Cub-HQ project boards for one issue."""
 import argparse, functools, json, re, subprocess, sys, time
 from datetime import datetime, timezone
 
-PROJECTS = (3, 4)  # users/Cubatica projects: Fitness Coach Factory, All Projects
-OWNER = "Cubatica"
+PROJECTS = (1, 2)  # orgs/Cub-HQ projects: Fitness Coach Factory, All Projects
+OWNER = "Cub-HQ"
 
 
 def projects_for(repo):
-    return PROJECTS if repo == "Cubatica/fitness-coach" else (4,)
+    return PROJECTS if repo == "Cub-HQ/fitness-coach" else (2,)
 
 
 # Pipeline job milestones, not board columns; mirror this repo's df-pipeline.yml.
@@ -51,12 +51,12 @@ def pages(path):
 @functools.cache
 def project_fields(number):
     return {f["name"]: f for f in pages(
-        f"users/{OWNER}/projectsV2/{number}/fields?per_page=30")}
+        f"orgs/{OWNER}/projectsV2/{number}/fields?per_page=30")}
 
 
 def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, running_for=None, shipped_at=None):
     """Update an existing item without querying or adding any board items."""
-    path = f"users/{OWNER}/projectsV2/{number}"
+    path = f"orgs/{OWNER}/projectsV2/{number}"
     fields = project_fields(number)
     stage = fields.get("Workflow Stage")
     opt = next((o["id"] for o in (stage or {}).get("options", [])
@@ -107,7 +107,7 @@ def first_ship_date(issue, existing=None):
 
 
 def sync_project(number, issue, stage_name, run_url):
-    path = f"users/{OWNER}/projectsV2/{number}"
+    path = f"orgs/{OWNER}/projectsV2/{number}"
     date_field = project_fields(number).get("Shipped At")
     selected = f"&fields={date_field['id']}" if date_field else ""
     item = next((i for i in pages(f"{path}/items?per_page=100{selected}")
