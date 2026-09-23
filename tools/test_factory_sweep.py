@@ -1,4 +1,5 @@
 """Board derivation contract; run with python -m unittest discover -s tools -p test_factory_sweep.py."""
+import json
 import unittest
 from unittest.mock import patch
 
@@ -96,6 +97,36 @@ class DeriveStageTest(unittest.TestCase):
             self.assertEqual(updates, ([{"id": 3, "value": "blocked"}]
                                       if current != "Blocked" else []) +
                              ([{"id": 2, "value": reason}] if why != reason else []))
+
+    def test_dependency_snapshot_and_board_lifecycle(self):
+        blocker = {"state": "open", "html_url": "https://github.com/Cubatica/orca/issues/7",
+                   "title": "Repair release"}
+        fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2},
+                  "Workflow Stage": {"id": 3, "options": [
+                      {"id": stage, "name": {"raw": stage}}
+                      for stage in ("Blocked", "Queued", "Human Review Needed")]}}
+        for dependencies, labels, expected in (([[blocker]], ["factory:needs-you"], "Blocked"),
+                ([[dict(blocker, state="closed")]], [], "Queued"), ([[]], [], "Queued"),
+                ([[]], ["factory:needs-you"], "Human Review Needed")):
+            with self.subTest(dependencies=dependencies, labels=labels):
+                replies = [json.dumps([[{"number": 45, "labels": [{"name": x} for x in labels],
+                                        "updated_at": "2026-09-23T00:00:00Z"}]]),
+                           json.dumps(dependencies), json.dumps({"workflow_runs": []})]
+                with patch.object(factory_sweep, "gh", side_effect=replies):
+                    issues, _, running, jobs = factory_sweep.snapshot()
+                item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
+                        "repository": {"nameWithOwner": factory_sweep.R}},
+                        "stage": {"name": "Human Review Needed" if expected == "Blocked" else "Blocked"},
+                        "why": {"text": "Blocked by: old dependency"}}
+                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                     patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
+                     patch.object(factory_sweep, "board_items", return_value=[item]), \
+                     patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
+                    self.assertEqual(factory_sweep.reconcile_board(issues, running, jobs), 1)
+                updates = [field for call in api.call_args_list for field in call.args[2]["fields"]]
+                self.assertEqual(updates, [{"id": 3, "value": expected},
+                    {"id": 2, "value": ("Blocked by: " + blocker["html_url"] + " — " + blocker["title"])
+                     if expected == "Blocked" else None}])
 
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")
