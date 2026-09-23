@@ -50,6 +50,33 @@ class DeriveStageTest(unittest.TestCase):
             with self.subTest(state=state, labels=labels, running=running, current=current):
                 self.assertEqual(derive_stage(state, labels, running, current), expected)
 
+    def test_orchestrator_direct_lifecycle(self):
+        label = "factory:orch-direct"
+        self.assertEqual(derive_stage("open", [label], False), "Building")
+        self.assertEqual(derive_stage("closed", [label], False), "Shipped")
+        self.assertEqual(derive_stage("open", [label, "factory:needs-you"], False), "Human Review Needed")
+        self.assertEqual(derive_stage("open", [label], False, blocked_by=[7]), "Blocked")
+        item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
+                "repository": {"nameWithOwner": factory_sweep.R}},
+                "stage": {"name": "Queued"}, "why": {"text": ""},
+                "running_for": {"text": "?"}}
+        fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}
+        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+             patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
+             patch.object(factory_sweep, "board_items", return_value=[item]), \
+             patch.object(factory_sweep.board_sync, "update_item") as update, \
+             patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
+            issues = [{"n": 45, "labs": [label, "actions:go", "factory:building"]}]
+            self.assertEqual(factory_sweep.reconcile_board(issues, {}), 1)
+            self.assertEqual(update.call_args.args[2], "Building")
+            self.assertEqual(api.call_args.args[2]["fields"], [{"id": 2, "value": "orchestrator direct"}])
+            item["stage"]["name"] = "Building"
+            item["why"]["text"] = "orchestrator direct"
+            self.assertEqual(factory_sweep.reconcile_board(issues, {}), 0)
+            with patch.object(factory_sweep, "snapshot", return_value=(issues, set(), {}, {})), \
+                 patch.object(factory_sweep, "gh", side_effect=AssertionError("must not requeue direct work")):
+                factory_sweep.main()
+
     def test_board_routing(self):
         board = factory_sweep.board_sync
         for repo, expected in (("fitness-coach", [3, 4]), ("omp-config-backup", [4]),

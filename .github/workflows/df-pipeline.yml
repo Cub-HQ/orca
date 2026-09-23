@@ -142,7 +142,8 @@ jobs:
           printf '%s\n\n' "$STANDING_RULINGS" > brief.md
           cat >> brief.md <<EOF
           You are DF Intake, the factory front door. Read issue #$ISSUE on $R with gh api repos/$R/issues/$ISSUE (and its comments).
-          Judge ONLY: can a builder implement this without guessing? It needs (1) a clear defect or feature, (2) an explicit testable Done-when, (3) everything referenced actually reachable in this repo.
+          Judge readiness and lane: can a builder implement this without guessing? It needs (1) a clear defect or feature, (2) an explicit testable Done-when, (3) everything referenced actually reachable in this repo.
+          Fast-lane classification (fail safe): choose ORCH_DIRECT only when ALL are proven: one obvious surface; no schema, auth/security, money, or deploy/lifecycle changes; estimated diff in exactly one file; an explicit runnable proof command; can be completed in under 10 minutes. Anything uncertain, broad, risky, or missing evidence is FACTORY. If all hold put FAST_LANE=orch-direct on its own line before INTAKE=go; otherwise FAST_LANE=factory. Include the exact target file and proof command in the hand-off. Never apply labels yourself; the workflow owns routing.
           Post ONE comment on issue #$ISSUE starting '## DF_Intake':
           - Start with a section '### What we are fixing and why': 2-4 short sentences in plain words - what is broken or missing today, why fixing it matters to Josh (what it unblocks or stops annoying), then on its own line: 'Issue: https://github.com/$R/issues/$ISSUE'.
           - Either way, show your reasoning as a 3-line checklist, one per criterion: 'Defect clear: YES/NO - <why>', 'Done-when testable: YES/NO - <why>', 'References reachable: YES/NO - <why>'.
@@ -183,6 +184,14 @@ jobs:
             INTAKE=needs-info) G=needs-info ;;
             *) G= ;;
           esac
+          if [ "$G" = go ] && [ "$(printf '%s\n' "$B" | jq -Rs '[split("\n")[] | select(startswith("FAST_LANE="))] == ["FAST_LANE=orch-direct"]')" = true ]; then
+            gh api -X POST "repos/$R/issues/$ISSUE/comments" -f body='Routed to orchestrator - small fix lane' >/dev/null
+            gh api -X POST "repos/$R/issues/$ISSUE/labels" -f 'labels[]=factory:orch-direct' >/dev/null
+            gh api -X DELETE "repos/$R/issues/$ISSUE/labels/actions%3Ago" >/dev/null 2>&1 || true
+            G=orch-direct
+          else
+            gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3Aorch-direct" >/dev/null 2>&1 || true
+          fi
           echo "go=$G" >> "$GITHUB_OUTPUT"
           echo "intake: $G"
           test -n "$G"
@@ -862,7 +871,7 @@ jobs:
   finalize:
     name: "Verdict"
     needs: [intake, build, review1, rework, review2, qa, rebase, ship]
-    if: always() && needs.intake.result != 'skipped'
+    if: always() && needs.intake.result != 'skipped' && needs.intake.outputs.go != 'orch-direct'
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:

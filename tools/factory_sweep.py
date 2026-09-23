@@ -39,6 +39,8 @@ def derive_stage(state, labels, running, current=None, job=None, blocked_by=()):
         return "Human Review Needed"
     if "factory:blocked" in labels:
         return "Blocked"
+    if "factory:orch-direct" in labels:
+        return "Building"
     if running:
         if job in {"Intake", "Build", "Rework"}:
             return "Building"
@@ -150,7 +152,9 @@ def reconcile_board(issues=None, running=None, jobs=None):
                         f"{b['html_url']} — {b['title']}" for b in blockers[n])
                 elif "factory:orch-action" in labels.get(n, []):
                     desired_why = "orchestrator handling - not Josh"
-            clear_why = bool(current_why) and (stage not in {"Human Review Needed", "Blocked"}
+            if stage == "Building" and "factory:orch-direct" in labels.get(n, []):
+                desired_why = "orchestrator direct"
+            clear_why = bool(current_why) and desired_why is None and (stage not in {"Human Review Needed", "Blocked"}
                          or (current_why.startswith("Blocked by: ") and desired_why is None))
             set_why = desired_why is not None and current_why != desired_why
             if (stage != current or clear_why or set_why) and corrections < 30:
@@ -186,7 +190,7 @@ def main():
         n, labs = i["n"], set(i["labs"])
         if n in active or i.get("blocked_by"):
             continue  # do not re-fire dispatch while a run is queued or active
-        if labs & (WAIT | {"factory:blocked"}):
+        if labs & (WAIT | {"factory:blocked", "factory:orch-direct"}):
             continue
         elif "actions:go" in labs:
             # labeled go but nothing running: event was lost -> re-fire.
