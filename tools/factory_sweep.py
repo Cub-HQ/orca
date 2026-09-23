@@ -87,36 +87,22 @@ def snapshot():
 
 
 def board_items(number):
-    query = """query($owner:String!, $number:Int!, $cursor:String) {
-      user(login:$owner) { projectV2(number:$number) {
-        items(first:100, after:$cursor) {
-          pageInfo { hasNextPage endCursor }
-          nodes { databaseId
-            stage:fieldValueByName(name:"Workflow Stage") {
-              ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt }
-            }
-            why:fieldValueByName(name:"Why Awaiting Human") {
-              ... on ProjectV2ItemFieldTextValue { text }
-            }
-            running_for:fieldValueByName(name:"Running For") {
-              ... on ProjectV2ItemFieldTextValue { text }
-            }
-            content { ... on Issue { number state repository { nameWithOwner } } }
-          }
-        }
-      } }
-    }"""
-    cursor = None
-    while True:
-        result, _ = board_sync.api("graphql", "POST", {"query": query, "variables": {
-            "owner": board_sync.OWNER, "number": number, "cursor": cursor}})
-        if result.get("errors"):
-            raise RuntimeError(result["errors"])
-        items = result["data"]["user"]["projectV2"]["items"]
-        yield from items["nodes"]
-        if not items["pageInfo"]["hasNextPage"]:
-            break
-        cursor = items["pageInfo"]["endCursor"]
+    fields = board_sync.project_fields(number)
+    ids = ",".join(str(fields[name]["id"]) for name in
+                   ("Workflow Stage", "Why Awaiting Human", "Running For") if name in fields)
+    for item in board_sync.pages(
+            f"users/{board_sync.OWNER}/projectsV2/{number}/items?per_page=100&fields={ids}"):
+        issue = item.get("content") or {}
+        if item.get("content_type") != "Issue":
+            continue
+        values = {field["name"]: field.get("value") or {} for field in item.get("fields", [])}
+        # REST has no field-specific timestamp; item.updated_at changes on our own duration writes.
+        yield {"databaseId": item["id"],
+               "stage": {"name": values.get("Workflow Stage", {}).get("name", {}).get("raw")},
+               "why": {"text": values.get("Why Awaiting Human", {}).get("raw")},
+               "running_for": {"text": values.get("Running For", {}).get("raw")},
+               "content": {"number": issue["number"], "state": issue["state"].upper(),
+                           "repository": {"nameWithOwner": issue["repository_url"].split("/repos/", 1)[-1]}}}
 
 
 def reconcile_board(issues=None, running=None, jobs=None):
