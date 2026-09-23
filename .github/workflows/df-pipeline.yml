@@ -816,8 +816,14 @@ jobs:
               esac
             fi
             printf '%s\n' "$FINDINGS" > "$RUNNER_TEMP/df-findings-$ISSUE.txt"
-            gh api "repos/$R/contents/tools/factory_dependencies.py" --jq .content | base64 -d > "$RUNNER_TEMP/factory_dependencies.py"
-            DEPENDENCY=$(python3 "$RUNNER_TEMP/factory_dependencies.py" --repo "$R" --issue "$ISSUE" --findings-file "$RUNNER_TEMP/df-findings-$ISSUE.txt")
+            if gh api "repos/$R/contents/tools/factory_dependencies.py" --jq .content | base64 -d > "$RUNNER_TEMP/factory_dependencies.py" && DEPENDENCY=$(python3 "$RUNNER_TEMP/factory_dependencies.py" --repo "$R" --issue "$ISSUE" --findings-file "$RUNNER_TEMP/df-findings-$ISSUE.txt"); then
+              :
+            else
+              DEPENDENCY='{"kind":"error"}'
+              say "## Orchestrator action needed
+
+          Dependency recording failed. Repair the dependency helper or GitHub request before requeueing; do not ask Josh to debug it."
+            fi
             for L in actions%3Aparked actions%3Aneeds-info factory%3Aneeds-info factory%3Aneeds-you factory%3Aorch-action; do
               gh api -X DELETE "repos/$R/issues/$ISSUE/labels/$L" >/dev/null 2>&1 || true
             done
