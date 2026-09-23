@@ -68,10 +68,11 @@ def attach(repo, issue, findings, dry_run=False):
     source = api(f"{root}/{issue}")
     if "pull_request" in source or source["state"] != "open":
         raise ValueError("Dependent must be an open issue")
-    trackers = [row for row in pages(f"{root}?state=open")
+    trackers = [row for row in pages(f"{root}?state=all")
                 if "pull_request" not in row and row["title"].startswith("Blocker: ")]
     decision = classify(repo, issue, findings,
-                        [{"number": row["number"], "title": row["title"]} for row in trackers])
+                        [{"number": row["number"], "title": row["title"], "state": row["state"]}
+                         for row in trackers])
     if decision["kind"] == "none":
         return decision
     if decision["kind"] == "issue":
@@ -100,6 +101,9 @@ def attach(repo, issue, findings, dry_run=False):
             if dry_run:
                 return {**decision, "would_create": title}
             blocker = api(root, "POST", {"title": title, "body": findings})
+        elif blocker["state"] == "closed":
+            return {"kind": "none", "reason": "Tracked blocker is already closed",
+                    "blocker": blocker["html_url"]}
     if blocker["number"] == issue:
         raise ValueError("Self dependency refused")
     endpoint = f"{root}/{issue}/dependencies/blocked_by"
