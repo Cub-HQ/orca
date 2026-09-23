@@ -205,6 +205,44 @@ class DeriveStageTest(unittest.TestCase):
                     self.assertEqual(factory_sweep.reconcile_board(), 1)
                 self.assertEqual(update.call_args_list[0].args[2], expected)
 
+    def test_cancelled_worker_and_skipped_successors_clear_building(self):
+        for conclusion, queued in (("cancelled", False), ("failure", False), ("cancelled", True)):
+            with self.subTest(conclusion=conclusion, queued=queued):
+                started = "2026-09-23T00:00:00Z"
+                def github(path, *args):
+                    if "/dependencies/" in path:
+                        return json.dumps([[]])
+                    if "/actions/runs?" in path:
+                        return json.dumps([{"workflow_runs": ([
+                            {"id": 3, "display_title": "#31 manual", "status": "queued",
+                             "run_started_at": "2026-09-23T02:00:00Z"}] if queued else []) + [
+                            {"id": 2, "display_title": "#31 manual", "status": "completed",
+                             "conclusion": "skipped", "run_started_at": "2026-09-23T01:00:00Z"}]},
+                            {"workflow_runs": [{"id": 1, "display_title": "#31 manual",
+                             "status": "completed", "conclusion": conclusion, "run_started_at": started}]}])
+                    if "/jobs?" in path:
+                        return json.dumps([{"jobs": [{"name": "Build" if "/1/" in path else "Intake",
+                            "status": "completed", "started_at": started,
+                            "conclusion": conclusion if "/1/" in path else "skipped"}]}])
+                    self.assertIn("/issues?state=open", path)
+                    return json.dumps([[{"number": 31, "updated_at": started,
+                        "labels": [{"name": "actions:go"}, {"name": "factory:building"}]}]])
+
+                item = {"databaseId": 31, "content": {"number": 31, "state": "OPEN",
+                        "repository": {"nameWithOwner": factory_sweep.R}},
+                        "stage": {"name": "Building"}, "running_for": {"text": "00:50:00"}}
+                with patch.object(factory_sweep, "gh", side_effect=github):
+                    issues, active, running, jobs = factory_sweep.snapshot()
+                self.assertEqual(active, {31} if queued else set())
+                self.assertEqual(running, {})
+                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                     patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
+                     patch.object(factory_sweep, "board_items", return_value=[item]), \
+                     patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
+                    self.assertEqual(factory_sweep.reconcile_board(issues, running, jobs), 1)
+                self.assertEqual(update.call_args_list[0].args[2], "Queued")
+                self.assertEqual(update.call_args_list[1].kwargs, {"running_for": ""})
+
     def test_triage_resets_board_progress(self):
         board = factory_sweep.board_sync
         fields = {"Workflow Stage": {"id": 1, "options": [
