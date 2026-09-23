@@ -27,10 +27,12 @@ def gh(*args):
     return r.stdout
 
 
-def derive_stage(state, labels, running, current=None, job=None):
+def derive_stage(state, labels, running, current=None, job=None, blocked_by=()):
     """Human gates beat live jobs; only a live run may preserve a finer stage."""
     if state.lower() == "closed":
         return "Shipped"
+    if blocked_by:
+        return "Blocked"
     if "factory:orch-action" in labels:
         return "Blocked"
     if set(labels) & (WAIT | PARKED_OK):
@@ -71,6 +73,12 @@ def snapshot():
     issues = json.loads(gh(f"repos/{R}/issues?state=open&per_page=100", "--paginate", "--slurp"))
     issues = [{"n": i["number"], "labs": [l["name"] for l in i["labels"]],
                "updated": i["updated_at"]} for page in issues for i in page if "pull_request" not in i]
+    for issue in issues:
+        pages = json.loads(gh(
+            f"repos/{R}/issues/{issue['n']}/dependencies/blocked_by?per_page=100",
+            "--paginate", "--slurp"))
+        issue["blocked_by"] = [blocker for page in pages for blocker in page
+                               if blocker["state"].lower() == "open"]
     runs = json.loads(gh(f"repos/{R}/actions/runs?per_page=100"))["workflow_runs"]
     active, running, jobs = set(), {}, {}
     for run in sorted(runs, key=lambda r: r.get("run_started_at") or "", reverse=True):
@@ -111,6 +119,7 @@ def reconcile_board(issues=None, running=None, jobs=None):
     if issues is None:
         issues, _, running, jobs = snapshot()
     labels = {i["n"]: i["labs"] for i in issues}
+    blockers = {i["n"]: i.get("blocked_by", []) for i in issues}
     corrections = refreshes = 0
     now = time.time()
     for project in board_sync.PROJECTS:
@@ -132,12 +141,18 @@ def reconcile_board(issues=None, running=None, jobs=None):
                 continue  # opened after the REST snapshot; reconcile next sweep
             current = (item.get("stage") or {}).get("name")
             stage = derive_stage(issue["state"], labels.get(n, []), n in running, current,
-                                 (jobs or {}).get(n))
-            clear_why = bool((item.get("why") or {}).get("text")) and stage not in {
-                "Human Review Needed", "Blocked"}
-            orch_why = "orchestrator handling - not Josh"
-            set_why = (stage == "Blocked" and "factory:orch-action" in labels.get(n, [])
-                       and (item.get("why") or {}).get("text") != orch_why)
+                                 (jobs or {}).get(n), blockers.get(n, []))
+            current_why = (item.get("why") or {}).get("text") or ""
+            desired_why = None
+            if stage == "Blocked":
+                if blockers.get(n):
+                    desired_why = "Blocked by: " + "; ".join(
+                        f"{b['html_url']} — {b['title']}" for b in blockers[n])
+                elif "factory:orch-action" in labels.get(n, []):
+                    desired_why = "orchestrator handling - not Josh"
+            clear_why = bool(current_why) and (stage not in {"Human Review Needed", "Blocked"}
+                         or (current_why.startswith("Blocked by: ") and desired_why is None))
+            set_why = desired_why is not None and current_why != desired_why
             if (stage != current or clear_why or set_why) and corrections < 30:
                 board_sync.update_item(project, item["databaseId"],
                                        stage if stage != current else None, clear_why=clear_why)
@@ -145,7 +160,7 @@ def reconcile_board(issues=None, running=None, jobs=None):
                     board_sync.api(
                         f"users/{board_sync.OWNER}/projectsV2/{project}/items/{item['databaseId']}",
                         "PATCH", {"fields": [{"id": fields["Why Awaiting Human"]["id"],
-                                              "value": orch_why}]})
+                                              "value": desired_why}]})
                 corrections += 1
                 print(f"board-drift: #{n} was {current or '(unset)'}, derived {stage}"
                       f" (project {project}" + ("; cleared Why" if clear_why else "") + ")")
@@ -169,7 +184,7 @@ def main():
 
     for i in issues:
         n, labs = i["n"], set(i["labs"])
-        if n in active:
+        if n in active or i.get("blocked_by"):
             continue  # do not re-fire dispatch while a run is queued or active
         if labs & (WAIT | {"factory:blocked"}):
             continue
