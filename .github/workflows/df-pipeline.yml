@@ -21,6 +21,24 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       go: ${{ steps.v.outputs.go }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to Building
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Building" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: "What we're fixing"
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -99,6 +117,24 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       pr: ${{ steps.pr.outputs.pr }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to Building
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Building" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -175,6 +211,24 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to In review
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "In review" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -266,6 +320,24 @@ jobs:
     outputs:
       stats: ${{ steps.gi.outputs.stats }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to Building
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Building" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -342,6 +414,24 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       verdict: ${{ steps.v.outputs.verdict }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to In review
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "In review" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -435,6 +525,24 @@ jobs:
       stats: ${{ steps.gi.outputs.stats }}
       qa: ${{ steps.v.outputs.qa }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to QA
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "QA" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -517,6 +625,24 @@ jobs:
     outputs:
       stats: ${{ steps.gi.outputs.stats }}
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to Deploying
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Deploying" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: "Needed?"
         id: chk
         env:
@@ -603,6 +729,24 @@ jobs:
     runs-on: [self-hosted, m4]
     timeout-minutes: 10
     steps:
+      - name: Checkout board sync
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: main
+          path: board-stage
+          sparse-checkout: tools/board_sync.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set board stage to Deploying
+        continue-on-error: true
+        working-directory: board-stage
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          R: ${{ github.repository }}
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Deploying" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       - name: Stage label
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
