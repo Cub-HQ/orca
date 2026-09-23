@@ -3,17 +3,18 @@
 Fixes, without asking:
 - board stage contradicting reality (labels + live runs are ground truth)
 - closed issues still on active board columns
-- issues with actions:go but no live/queued run for >20 min -> re-fire the label
+- issues with actions:go but no live/queued run for >20 min -> dispatch the existing issue
 Leaves alone: needs-plan, umbrella PRDs, and true waiting labels.
 """
 import json
+import os
 import re
 import subprocess
 import board_sync
 import time
 from datetime import datetime
 
-R = "Cubatica/orca"
+R = os.environ.get("GITHUB_REPOSITORY", "Cubatica/omp-config-backup")
 WAIT = {"actions:needs-info", "factory:needs-info", "actions:parked",
         "factory:needs-you", "factory:awaiting-review", "factory:awaiting-merge",
         "factory:awaiting-user-review"}
@@ -232,9 +233,9 @@ def main():
             ref = ev or i["updated"]
             age = time.time() - time.mktime(time.strptime(ref, "%Y-%m-%dT%H:%M:%SZ"))
             if age > 1200:
-                gh("-X", "DELETE", f"repos/{R}/issues/{n}/labels/actions%3Ago")
-                gh("-X", "POST", f"repos/{R}/issues/{n}/labels", "-f", "labels[]=actions:go")
-                print(f"#{n}: re-fired lost actions:go (label age {int(age)}s)")
+                gh("-X", "POST", f"repos/{R}/actions/workflows/df-pipeline.yml/dispatches",
+                   "-f", "ref=main", "-f", f"inputs[issue]={n}")
+                print(f"#{n}: dispatched lost actions:go (label age {int(age)}s)")
         elif labs & PARKED_OK or not labs & {"actions:go"}:
             # deliberately parked (needs-plan/umbrella) or legacy leftover state labels
             stray = labs & {"actions:building", "factory:building", "factory:pr-open", "factory:reviewed"}

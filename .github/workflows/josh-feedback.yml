@@ -1,0 +1,40 @@
+---
+name: josh-feedback
+permissions:
+  issues: write
+  actions: write
+  contents: read
+concurrency:
+  group: josh-feedback-${{ github.event.issue.number }}
+  cancel-in-progress: true
+jobs:
+  requeue:
+    name: Josh answered - requeue
+    if: 'github.event.issue.state == ''open'' && !github.event.issue.pull_request
+      && github.event.comment.user.type == ''User'' && github.event.comment.user.login
+      == ''Cubatica'' && (contains(github.event.issue.labels.*.name, ''actions:needs-info'')
+      || contains(github.event.issue.labels.*.name, ''factory:needs-you'')) && startsWith(github.event.comment.body,
+      ''Answer: '')'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Dispatch the answered question once
+      env:
+        ISSUE: "${{ github.event.issue.number }}"
+        R: "${{ github.repository }}"
+        LABELS: "${{ join(github.event.issue.labels.*.name, ',') }}"
+        GH_TOKEN: "${{ secrets.FACTORY_TOKEN || github.token }}"
+      run: |
+        set -euo pipefail
+        CURRENT=$(gh api "repos/$R/issues/$ISSUE")
+        [ "$(jq -r .state <<< "$CURRENT")" = open ] || exit 0
+        jq -e '[.labels[].name] | any(. == "actions:needs-info" or . == "factory:needs-you")' <<< "$CURRENT" >/dev/null || exit 0
+        for L in actions%3Aneeds-info factory%3Aneeds-info actions%3Aparked factory%3Aneeds-you; do
+          gh api -X DELETE "repos/$R/issues/$ISSUE/labels/$L" >/dev/null 2>&1 || true
+        done
+        gh api -X POST "repos/$R/actions/workflows/df-pipeline.yml/dispatches" -f ref=main -f "inputs[issue]=$ISSUE"
+        echo "Requeued #$ISSUE from Josh's explicit answer; no label toggle."
+'on':
+  issue_comment:
+    types:
+    - created

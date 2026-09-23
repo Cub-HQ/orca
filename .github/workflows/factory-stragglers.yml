@@ -1,0 +1,39 @@
+---
+name: factory-stragglers
+'on':
+  push:
+    branches:
+    - main
+    paths:
+    - ".github/workflows/df-pipeline.yml"
+  workflow_run:
+    workflows:
+    - df-pipeline
+    types:
+    - completed
+  schedule:
+  - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  issues: write
+  actions: write
+concurrency:
+  group: df-straggler-sweep
+  cancel-in-progress: false
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: main
+        persist-credentials: false
+    - name: Sweep workflow upgrades and stalled work
+      env:
+        GH_TOKEN: "${{ github.token }}"
+        R: "${{ github.repository }}"
+      run: 'python3 tools/factory_stragglers.py sweep --repo "$R" --current-ref main
+
+'
