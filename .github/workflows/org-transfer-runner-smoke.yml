@@ -1,0 +1,12 @@
+name: org-transfer-runner-smoke
+on: workflow_dispatch
+permissions: {}
+jobs:
+  pickup:
+    strategy:
+      matrix:
+        target: [org-transfer-smoke-21, org-transfer-smoke-22]
+    runs-on: [self-hosted, m4, "${{ matrix.target }}"]
+    timeout-minutes: 2
+    steps:
+      - run: echo "org-transfer-pickup ${{ runner.name }}"; uname -m
