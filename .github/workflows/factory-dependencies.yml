@@ -1,0 +1,23 @@
+name: factory-dependencies
+on:
+  issues:
+    types: [closed]
+permissions:
+  contents: read
+  issues: read
+  actions: write
+concurrency:
+  group: factory-dependencies
+  cancel-in-progress: false
+jobs:
+  requeue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resume unblocked dependents
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: python3 tools/factory_dependencies.py --repo "$REPO" --issue "$ISSUE" --closed
