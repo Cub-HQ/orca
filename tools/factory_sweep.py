@@ -27,15 +27,27 @@ def gh(*args):
     return r.stdout
 
 
-def derive_stage(state, labels, running, current=None):
-    """Derive board truth; only a live run may preserve a finer pipeline stage."""
+def derive_stage(state, labels, running, current=None, job=None):
+    """Human gates beat live jobs; only a live run may preserve a finer stage."""
     if state.lower() == "closed":
         return "Shipped"
-    if set(labels) & {"factory:needs-you", "actions:needs-info", "factory:needs-info"}:
+    if set(labels) & (WAIT | PARKED_OK):
         return "Human Review Needed"
     if "factory:blocked" in labels:
         return "Blocked"
     if running:
+        if job in {"Intake", "Build", "Rework"}:
+            return "Building"
+        if job in {"Review", "Re-review"}:
+            return "In review"
+        if job and job.startswith("Source QA"):
+            return "QA"
+        if job == "Deploy" or (job and job.startswith(("Rebase", "Merge"))):
+            return "Deploying"
+        if job and job.startswith("Live Slack") and "acceptance" in job.lower():
+            return "Live test"
+        if job == "Verdict" and current:
+            return current
         return current if current in {"In review", "QA", "Deploying", "Live test"} else "Building"
     return "Queued"
 
@@ -58,16 +70,20 @@ def snapshot():
     issues = [{"n": i["number"], "labs": [l["name"] for l in i["labels"]],
                "updated": i["updated_at"]} for page in issues for i in page if "pull_request" not in i]
     runs = json.loads(gh(f"repos/{R}/actions/runs?per_page=100"))["workflow_runs"]
-    active, running = set(), {}
+    active, running, jobs = set(), {}, {}
     for run in sorted(runs, key=lambda r: r.get("run_started_at") or "", reverse=True):
         if run["status"] in {"queued", "in_progress", "pending"}:
             match = re.search(r"#(\d+) ", run.get("display_title") or "")
             if match:
                 n = int(match[1])
                 active.add(n)
-                if run["status"] == "in_progress":
-                    running.setdefault(n, run.get("run_started_at"))
-    return issues, active, running
+                if run["status"] == "in_progress" and n not in running:
+                    running[n] = run.get("run_started_at")
+                    pages = json.loads(gh(f"repos/{R}/actions/runs/{run['id']}/jobs?per_page=100",
+                                          "--paginate", "--slurp"))
+                    jobs[n] = next((job["name"] for page in pages for job in page["jobs"]
+                                    if job["status"] == "in_progress"), None)
+    return issues, active, running, jobs
 
 
 def board_items(number):
@@ -103,9 +119,9 @@ def board_items(number):
         cursor = items["pageInfo"]["endCursor"]
 
 
-def reconcile_board(issues=None, running=None):
+def reconcile_board(issues=None, running=None, jobs=None):
     if issues is None:
-        issues, _, running = snapshot()
+        issues, _, running, jobs = snapshot()
     labels = {i["n"]: i["labs"] for i in issues}
     corrections = refreshes = 0
     now = time.time()
@@ -123,7 +139,8 @@ def reconcile_board(issues=None, running=None):
             if issue["state"] == "OPEN" and n not in labels:
                 continue  # opened after the REST snapshot; reconcile next sweep
             current = (item.get("stage") or {}).get("name")
-            stage = derive_stage(issue["state"], labels.get(n, []), n in running, current)
+            stage = derive_stage(issue["state"], labels.get(n, []), n in running, current,
+                                 (jobs or {}).get(n))
             clear_why = bool((item.get("why") or {}).get("text")) and stage not in {
                 "Human Review Needed", "Blocked"}
             if (stage != current or clear_why) and corrections < 30:
@@ -148,7 +165,7 @@ def reconcile_board(issues=None, running=None):
 
 
 def main():
-    issues, active, running = snapshot()
+    issues, active, running, jobs = snapshot()
 
     for i in issues:
         n, labs = i["n"], set(i["labs"])
@@ -177,7 +194,7 @@ def main():
                 gh("-X", "POST", f"repos/{R}/issues/{n}/labels", "-f", "labels[]=actions:go")
                 print(f"#{n}: stray {stray} with no run -> requeued")
 
-    reconcile_board(issues, running)
+    reconcile_board(issues, running, jobs)
     print("sweep done")
 
 
