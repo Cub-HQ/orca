@@ -31,6 +31,8 @@ def derive_stage(state, labels, running, current=None, job=None):
     """Human gates beat live jobs; only a live run may preserve a finer stage."""
     if state.lower() == "closed":
         return "Shipped"
+    if "factory:orch-action" in labels:
+        return "Blocked"
     if set(labels) & (WAIT | PARKED_OK):
         return "Human Review Needed"
     if "factory:blocked" in labels:
@@ -133,9 +135,17 @@ def reconcile_board(issues=None, running=None, jobs=None):
                                  (jobs or {}).get(n))
             clear_why = bool((item.get("why") or {}).get("text")) and stage not in {
                 "Human Review Needed", "Blocked"}
-            if (stage != current or clear_why) and corrections < 30:
+            orch_why = "orchestrator handling - not Josh"
+            set_why = (stage == "Blocked" and "factory:orch-action" in labels.get(n, [])
+                       and (item.get("why") or {}).get("text") != orch_why)
+            if (stage != current or clear_why or set_why) and corrections < 30:
                 board_sync.update_item(project, item["databaseId"],
                                        stage if stage != current else None, clear_why=clear_why)
+                if set_why:
+                    board_sync.api(
+                        f"users/{board_sync.OWNER}/projectsV2/{project}/items/{item['databaseId']}",
+                        "PATCH", {"fields": [{"id": fields["Why Awaiting Human"]["id"],
+                                              "value": orch_why}]})
                 corrections += 1
                 print(f"board-drift: #{n} was {current or '(unset)'}, derived {stage}"
                       f" (project {project}" + ("; cleared Why" if clear_why else "") + ")")
