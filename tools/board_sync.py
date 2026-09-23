@@ -11,10 +11,14 @@ def projects_for(repo):
     return PROJECTS if repo == "Cubatica/fitness-coach" else (4,)
 
 
-# Pipeline milestones, not board columns (12 jobs including Admission).
-# admission intake build review rework re-review qa rebase merge deploy live-test verdict
-STEPS_DONE = {"Queued": 0, "Triage": 2, "Building": 3, "In review": 4, "QA": 7, "Deploying": 10, "Live test": 11, "Shipped": 12}
-TOTAL = 12
+# Pipeline job milestones, not board columns; mirror this repo's df-pipeline.yml.
+PIPELINE_STAGES = ("Admission", "Intake", "Build", "Review", "Rework", "Re-review",
+                   "QA", "Rebase", "Merge", "Verdict")
+TOTAL = len(PIPELINE_STAGES)
+STEPS_DONE = {"Queued": 0, "Shipped": TOTAL}
+STEPS_DONE.update({stage: PIPELINE_STAGES.index(job) + 1 for stage, job in {
+    "Triage": "Intake", "Building": "Build", "In review": "Review", "QA": "QA",
+    "Deploying": "Merge"}.items()})
 
 
 def api(path, method="GET", body=None):

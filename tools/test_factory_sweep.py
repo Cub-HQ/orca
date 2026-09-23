@@ -243,10 +243,10 @@ class DeriveStageTest(unittest.TestCase):
                 self.assertEqual(update.call_args_list[0].args[2], "Queued")
                 self.assertEqual(update.call_args_list[1].kwargs, {"running_for": ""})
 
-    def test_board_progress_tracks_twelve_pipeline_milestones(self):
+    def test_board_progress_tracks_pipeline_milestones(self):
         board = factory_sweep.board_sync
         milestones = {"Queued": 0, "Triage": 2, "Building": 3, "In review": 4,
-                      "QA": 7, "Deploying": 10, "Live test": 11, "Shipped": 12}
+                      "QA": 7, "Deploying": 9, "Shipped": 10}
         fields = {"Workflow Stage": {"id": 1, "options": [
             {"id": name, "name": {"raw": name}} for name in milestones]}, "Workflow Progress": {"id": 2}}
         for name, count in milestones.items():
@@ -254,7 +254,7 @@ class DeriveStageTest(unittest.TestCase):
                  patch.object(board, "api") as api:
                 board.update_item(4, 45, name)
             self.assertEqual(api.call_args.args[2]["fields"], [
-                {"id": 1, "value": name}, {"id": 2, "value": "▓" * count + "░" * (12 - count) + f" {count}/12"}])
+                {"id": 1, "value": name}, {"id": 2, "value": "▓" * count + "░" * (10 - count) + f" {count}/10"}])
 
     def test_ship_date_transition_backfill_and_reopen(self):
         board = factory_sweep.board_sync
