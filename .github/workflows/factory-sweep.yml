@@ -1,0 +1,26 @@
+name: factory-sweep
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: factory-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: "Self-heal stale issues"
+    runs-on: [self-hosted, m4]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sweep
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_TOKEN || github.token }}
+        run: python3 tools/factory_sweep.py
