@@ -68,8 +68,8 @@ class DeriveStageTest(unittest.TestCase):
              patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
             issues = [{"n": 45, "labs": [label, "actions:go", "factory:building"]}]
             self.assertEqual(factory_sweep.reconcile_board(issues, {}), 1)
-            self.assertEqual(update.call_args.args[4], "Building")
-            self.assertEqual(api.call_args.args[4]["fields"], [{"id": 2, "value": "orchestrator direct"}])
+            self.assertEqual(update.call_args.args[2], "Building")
+            self.assertEqual(api.call_args.args[2]["fields"], [{"id": 2, "value": "orchestrator direct"}])
             item["stage"]["name"] = "Building"
             item["why"]["text"] = "orchestrator direct"
             self.assertEqual(factory_sweep.reconcile_board(issues, {}), 0)
@@ -120,7 +120,7 @@ class DeriveStageTest(unittest.TestCase):
                 self.assertEqual(factory_sweep.reconcile_board(
                     [{"n": 45, "labs": ["factory:orch-action", "factory:needs-you"]}],
                     {45: "2026-09-23T00:00:00Z"}, {45: "Review"}), int(why != reason))
-            updates = [field for call in api.call_args_list for field in call.args[4]["fields"]]
+            updates = [field for call in api.call_args_list for field in call.args[2]["fields"]]
             self.assertEqual(updates, ([{"id": 3, "value": "blocked"}]
                                       if current != "Blocked" else []) +
                              ([{"id": 2, "value": reason}] if why != reason else []))
@@ -150,7 +150,7 @@ class DeriveStageTest(unittest.TestCase):
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
                     self.assertEqual(factory_sweep.reconcile_board(issues, running, jobs), 1)
-                updates = [field for call in api.call_args_list for field in call.args[4]["fields"]]
+                updates = [field for call in api.call_args_list for field in call.args[2]["fields"]]
                 self.assertEqual(updates, [{"id": 3, "value": expected},
                     {"id": 2, "value": ("Blocked by: " + blocker["html_url"] + " — " + blocker["title"])
                      if expected == "Blocked" else None}])
@@ -203,7 +203,7 @@ class DeriveStageTest(unittest.TestCase):
                      patch.object(factory_sweep.board_sync, "update_item") as update, \
                      patch.object(factory_sweep.board_sync, "api"), patch("builtins.print"):
                     self.assertEqual(factory_sweep.reconcile_board(), 1)
-                self.assertEqual(update.call_args_list[0].args[4], expected)
+                self.assertEqual(update.call_args_list[0].args[2], expected)
 
     def test_cancelled_worker_and_skipped_successors_clear_building(self):
         for conclusion, queued in (("cancelled", False), ("failure", False), ("cancelled", True)):
@@ -240,7 +240,7 @@ class DeriveStageTest(unittest.TestCase):
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
                     self.assertEqual(factory_sweep.reconcile_board(issues, running, jobs), 1)
-                self.assertEqual(update.call_args_list[0].args[4], "Queued")
+                self.assertEqual(update.call_args_list[0].args[2], "Queued")
                 self.assertEqual(update.call_args_list[1].kwargs, {"running_for": ""})
 
     def test_board_progress_tracks_pipeline_milestones(self):
@@ -253,7 +253,7 @@ class DeriveStageTest(unittest.TestCase):
             with self.subTest(stage=name), patch.object(board, "project_fields", return_value=fields), \
                  patch.object(board, "api") as api:
                 board.update_item(4, 45, name)
-            self.assertEqual(api.call_args.args[4]["fields"], [
+            self.assertEqual(api.call_args.args[2]["fields"], [
                 {"id": 1, "value": name}, {"id": 2, "value": "▓" * count + "░" * (10 - count) + f" {count}/10"}])
 
     def test_ship_date_transition_backfill_and_reopen(self):
@@ -279,14 +279,14 @@ class DeriveStageTest(unittest.TestCase):
                      patch.object(board, "pages", return_value=[row]) as pages, \
                      patch.object(board, "api", side_effect=persist) as api, patch("builtins.print"):
                     self.assertEqual(factory_sweep.reconcile_board([], {}), 1)
-                    self.assertIn({"id": 2, "value": "2026-09-20"}, api.call_args.args[4]["fields"])
+                    self.assertIn({"id": 2, "value": "2026-09-20"}, api.call_args.args[2]["fields"])
                     self.assertIn("fields=3,1,2", pages.call_args.args[0])
                     api.reset_mock()
                     self.assertEqual(factory_sweep.reconcile_board([], {}), 0)
                     api.assert_not_called()
                     row["content"]["state"] = "open"
                     factory_sweep.reconcile_board([{"n": 45, "labs": []}], {})
-                    self.assertNotIn(2, [f["id"] for f in api.call_args.args[4]["fields"]])
+                    self.assertNotIn(2, [f["id"] for f in api.call_args.args[2]["fields"]])
                     api.reset_mock()
                     row["fields"] = row["fields"][:1]
                     factory_sweep.reconcile_board([{"n": 45, "labs": []}], {})
@@ -301,7 +301,7 @@ class DeriveStageTest(unittest.TestCase):
                  patch.object(board, "pages", return_value=[row]), \
                  patch.object(board, "api") as api:
                 board.sync_project(4, issue, stage, "")
-            dates = [f["value"] for f in api.call_args.args[4]["fields"] if f["id"] == 2]
+            dates = [f["value"] for f in api.call_args.args[2]["fields"] if f["id"] == 2]
             self.assertEqual(dates, [expected] if expected else [])
 
     def test_ship_date_missing_close_requires_closing_pull_evidence(self):
