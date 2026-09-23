@@ -99,6 +99,26 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
         endpoint = f'{root}/issues/comments/{comment_id}' if comment_id else f'{root}/issues/{n}/comments'
         answer = call(endpoint, 'PATCH' if comment_id else 'POST', {'body': body})
         return answer['id']
+    def consolidate(n, run_id, comments):
+        found = [(comment, marker(comment)) for comment in comments]
+        found = [(comment, record) for comment, record in found
+                 if record and record.get('run') == run_id]
+        if not found:
+            return None, None
+        # Never let an earlier pending copy resurrect a dispatch already claimed.
+        priority = {'dispatched': 9, 'dispatch-unknown': 8, 'dispatch-claimed': 7,
+                    'scope-changed': 6, 'ineligible': 5, 'superseded': 4,
+                    'await-completion': 2, 'cancel-requested': 1}
+        canonical = min(comment['id'] for comment, _ in found)
+        record = dict(max(found, key=lambda pair: priority.get(pair[1]['state'], 0))[1])
+        if len(found) > 1:
+            # Conflicting snapshots are not authority to restart changed work.
+            if priority.get(record['state'], 0) < 4 and len({r['scope'] for _, r in found}) > 1:
+                record['state'] = 'scope-changed'
+            # Keep aliases readable; all future readers select the same strongest state.
+            if next(r for c, r in found if c['id'] == canonical) != record:
+                save(n, record, canonical)
+        return canonical, record
 
     for run in runs:
         n = issue_number(run)
@@ -109,12 +129,7 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
             comments_cache[n] = [comment for page in call(
                 f'{root}/issues/{n}/comments?per_page=100', pages=True) for comment in page]
         issue = issue_cache[n]
-        found = [(comment, marker(comment)) for comment in comments_cache[n]]
-        found = [(comment, record) for comment, record in found
-                 if record and record.get('run') == run['id']]
-        if len(found) > 1:
-            raise RuntimeError(f"Duplicate durable markers for run {run['id']}; refusing dispatch")
-        comment_id, record = (found[0][0]['id'], found[0][1]) if found else (None, None)
+        comment_id, record = consolidate(n, run['id'], comments_cache[n])
         if record and record['state'] in {'dispatched', 'dispatch-claimed', 'dispatch-unknown', 'scope-changed', 'ineligible', 'superseded'}:
             if record['state'] in {'dispatch-claimed', 'dispatch-unknown'}:
                 report.append(dict(record))
@@ -193,6 +208,15 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
             record['successor'] = other['id']
             save(n, record, comment_id)
         else:
+            # Another sweep may have created/claimed a marker after enumeration.
+            fresh_comments = [comment for page in call(
+                f'{root}/issues/{n}/comments?per_page=100', pages=True) for comment in page]
+            comment_id, fresh = consolidate(n, run['id'], fresh_comments)
+            if fresh['state'] in {'dispatched', 'dispatch-claimed', 'dispatch-unknown',
+                                  'scope-changed', 'ineligible', 'superseded'}:
+                report.append(dict(fresh))
+                continue
+            record = fresh
             record.update(state='dispatch-claimed', target=target, blob=blob)
             save(n, record, comment_id)  # durable claim precedes non-idempotent REST POST
             try:
@@ -315,6 +339,25 @@ def self_test():
     for association in ('OWNER', 'MEMBER', 'COLLABORATOR'):
         assert marker(dict(forged, author_association=association)) is not None
     assert marker(dict(forged, author_association='CONTRIBUTOR')) is None
+    pending = marker(comments[1][0])
+    pending['state'] = 'await-completion'
+    comments[1] = [dict(comments[1][0], id=1000 + offset,
+                        body=PREFIX + json.dumps(pending) + ' -->') for offset in range(2)]
+    runs[0]['status'] = 'in_progress'
+    sweep('owner/repo', 'main', call=fake, now=now)
+    assert len(effects) == count
+    runs[0]['status'] = 'completed'
+    sweep('owner/repo', 'main', call=fake, now=now)
+    sweep('owner/repo', 'main', call=fake, now=now)
+    assert len(effects) == count + 1 and effects[-1] == ('dispatch', 1)
+    for terminal in ('dispatched', 'dispatch-claimed', 'dispatch-unknown'):
+        finished = dict(pending, state=terminal)
+        comments[1][0]['body'] = PREFIX + json.dumps(pending) + ' -->'
+        comments[1][1]['body'] = PREFIX + json.dumps(finished) + ' -->'
+        sweep('owner/repo', 'main', call=fake, now=now)
+        assert len(effects) == count + 1
+        assert marker(comments[1][0])['state'] == terminal
+    print('PASS: duplicate pending aliases merge; completion dispatch once; any dispatched/claimed/unknown copy suppresses replay')
     print('PASS: paginated blob comparison; queued upgrade cancel-before-dispatch; in-progress deferred once; repeated sweep no duplicates; >30m Rework recycled; queued/dependency waits, acceptance, exact 30m excluded; closed/changed scope suppressed')
 
 
