@@ -136,7 +136,7 @@ def board_items(number):
                "stage": {"name": values.get("Workflow Stage", {}).get("name", {}).get("raw")},
                "why": {"text": values.get("Why Awaiting Human", {}).get("raw")},
                "running_for": {"text": values.get("Running For", {}).get("raw")},
-               "shipped_at": values.get("Shipped At", {}).get("raw"),
+               "shipped_at": values.get("Shipped At"),
                "content": {"number": issue["number"], "state": issue["state"].upper(),
                            "closed_at": issue.get("closed_at"),
                            "url": issue.get("url") or f"{issue['repository_url']}/issues/{issue['number']}",

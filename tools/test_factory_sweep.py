@@ -271,7 +271,7 @@ class DeriveStageTest(unittest.TestCase):
                 def persist(path, method, body):
                     for update in body["fields"]:
                         if update["id"] == 2:
-                            row["fields"].append({"name": "Shipped At", "value": {"raw": update["value"]}})
+                            row["fields"].append({"name": "Shipped At", "value": update["value"] + "T00:00:00+00:00"})
                         if update["id"] == 3:
                             row["fields"][0]["value"]["name"]["raw"] = update["value"]
                 with patch.object(board, "PROJECTS", (4,)), \
@@ -295,7 +295,7 @@ class DeriveStageTest(unittest.TestCase):
         for stage, existing, expected in (("Shipped", None, "2026-09-20"),
                 ("Shipped", "2026-09-19", None), ("Queued", None, None), ("Queued", "2026-09-19", None)):
             row = {"id": 45, "content": issue, "fields": [
-                {"name": "Shipped At", "value": {"raw": existing}}]}
+                {"name": "Shipped At", "value": existing + "T00:00:00+00:00" if existing else None}]}
             with self.subTest(stage=stage, existing=existing), \
                  patch.object(board, "project_fields", return_value=fields), \
                  patch.object(board, "pages", return_value=[row]), \

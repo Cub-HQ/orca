@@ -114,7 +114,7 @@ def sync_project(number, issue, stage_name, run_url):
                  if (i.get("content") or {}).get("url") == issue["url"]), None)
     if item is None:
         item, _ = api(f"{path}/items", "POST", {"type": "Issue", "id": issue["id"]})
-    existing = next(((field.get("value") or {}).get("raw") for field in item.get("fields", [])
+    existing = next((field.get("value") for field in item.get("fields", [])
                      if field["name"] == "Shipped At"), None)
     date = first_ship_date(issue, existing) if stage_name == "Shipped" and date_field else None
     update_item(number, item["id"], stage_name, run_url, shipped_at=date)
