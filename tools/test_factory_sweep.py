@@ -46,6 +46,31 @@ class DeriveStageTest(unittest.TestCase):
             with self.subTest(state=state, labels=labels, running=running, current=current):
                 self.assertEqual(derive_stage(state, labels, running, current), expected)
 
+    def test_board_routing(self):
+        board = factory_sweep.board_sync
+        for repo, expected in (("fitness-coach", [3, 4]), ("omp-config-backup", [4]),
+                               ("df-fixture", [4]), ("orca", [4])):
+            with self.subTest(repo=repo), \
+                 patch.object(board.sys, "argv", ["board_sync.py", "--repo", f"Cubatica/{repo}",
+                                                   "--issue", "45", "--stage", "Human Review Needed"]), \
+                 patch.object(board, "api", return_value=({"state": "open"}, None)), \
+                 patch.object(board, "sync_project") as sync, patch("builtins.print"):
+                board.main()
+                self.assertEqual([call.args[0] for call in sync.call_args_list], expected)
+
+    def test_foreign_item_never_updated_on_fitness_board(self):
+        item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
+                "repository": {"nameWithOwner": "Cubatica/omp-config-backup"}},
+                "stage": {"name": "Queued"}}
+        with patch.object(factory_sweep, "R", "Cubatica/omp-config-backup"), \
+             patch.object(factory_sweep.board_sync, "PROJECTS", (3, 4)), \
+             patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
+             patch.object(factory_sweep, "board_items", return_value=[item]), \
+             patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
+            self.assertEqual(factory_sweep.reconcile_board(
+                [{"n": 45, "labs": ["factory:awaiting-review"]}], {}), 1)
+        self.assertEqual([call.args[0] for call in update.call_args_list], [4])
+
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")
         self.assertEqual(format_elapsed(3661.9), "01:01:01")
@@ -66,7 +91,7 @@ class DeriveStageTest(unittest.TestCase):
                   "stage": {"name": "Queued"}} for n in range(101)]
         issues = [{"n": n, "labs": []} for n in range(101)]
         running = {n: "2026-09-23T00:00:00Z" for n in range(101)}
-        with patch.object(factory_sweep.board_sync, "PROJECTS", (3,)), \
+        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
              patch.object(factory_sweep, "board_items", return_value=items), \
              patch.object(factory_sweep.board_sync, "update_item") as update, \
