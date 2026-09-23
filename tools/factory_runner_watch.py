@@ -82,7 +82,7 @@ def block_board(repo, issue, url, reason):
             fields = board_sync.project_fields(project)
             why = fields.get("Why Awaiting Human")
             if why:
-                root = f"orgs/{board_sync.OWNER}/projectsV2/{project}"
+                root = f"users/{board_sync.OWNER}/projectsV2/{project}"
                 item = next(i for i in board_sync.pages(root + "/items?per_page=100")
                             if (i.get("content") or {}).get("url") == issue["url"])
                 board_sync.api(f"{root}/items/{item['id']}", "PATCH",
@@ -274,7 +274,7 @@ def self_test():
     import types
     board_calls = []
     stub = types.SimpleNamespace(
-        OWNER="Cub-HQ", projects_for=lambda repo: (2,),
+        OWNER="Cubatica", projects_for=lambda repo: (4,),
         sync_project=lambda *args: board_calls.append(args),
         project_fields=lambda project: {"Why Awaiting Human": {"id": 42}},
         pages=lambda path: [{"id": 90, "content": {"url": "issue-url"}}],
@@ -289,7 +289,7 @@ def self_test():
         else:
             sys.modules["board_sync"] = previous
     assert board_calls[0][2] == "Blocked"
-    assert board_calls[1] == ("orgs/Cub-HQ/projectsV2/2/items/90", "PATCH",
+    assert board_calls[1] == ("users/Cubatica/projectsV2/4/items/90", "PATCH",
                               {"fields": [{"id": 42, "value": "zero runners"}]})
     print("runner-watch self-test: PASS (hosted/local stall, idle/young/pending exclusion, trusted markers, board+tracker, cancel fence, duplicate replay, live-job no fallback)")
 
