@@ -243,15 +243,18 @@ class DeriveStageTest(unittest.TestCase):
                 self.assertEqual(update.call_args_list[0].args[2], "Queued")
                 self.assertEqual(update.call_args_list[1].kwargs, {"running_for": ""})
 
-    def test_triage_resets_board_progress(self):
+    def test_board_progress_tracks_twelve_pipeline_milestones(self):
         board = factory_sweep.board_sync
+        milestones = {"Queued": 0, "Triage": 2, "Building": 3, "In review": 4,
+                      "QA": 7, "Deploying": 10, "Live test": 11, "Shipped": 12}
         fields = {"Workflow Stage": {"id": 1, "options": [
-            {"id": "triage", "name": {"raw": "Triage"}}]}, "Workflow Progress": {"id": 2}}
-        with patch.object(board, "project_fields", return_value=fields), \
-             patch.object(board, "api") as api:
-            board.update_item(4, 45, "Triage")
-        self.assertEqual(api.call_args.args[2]["fields"], [
-            {"id": 1, "value": "triage"}, {"id": 2, "value": "▓░░░░░░░░░░ 1/11"}])
+            {"id": name, "name": {"raw": name}} for name in milestones]}, "Workflow Progress": {"id": 2}}
+        for name, count in milestones.items():
+            with self.subTest(stage=name), patch.object(board, "project_fields", return_value=fields), \
+                 patch.object(board, "api") as api:
+                board.update_item(4, 45, name)
+            self.assertEqual(api.call_args.args[2]["fields"], [
+                {"id": 1, "value": name}, {"id": 2, "value": "▓" * count + "░" * (12 - count) + f" {count}/12"}])
 
     def test_ship_date_transition_backfill_and_reopen(self):
         board = factory_sweep.board_sync
@@ -301,13 +304,22 @@ class DeriveStageTest(unittest.TestCase):
             dates = [f["value"] for f in api.call_args.args[2]["fields"] if f["id"] == 2]
             self.assertEqual(dates, [expected] if expected else [])
 
-    def test_ship_date_missing_close_uses_merged_pull(self):
+    def test_ship_date_missing_close_requires_closing_pull_evidence(self):
         board = factory_sweep.board_sync
         issue = {"state": "closed", "url": "https://api.github.com/repos/Cubatica/orca/issues/45"}
-        with patch.object(board, "pages", return_value=[{"source": {"issue": {
-                "pull_request": {"url": "https://api.github.com/repos/Cubatica/orca/pulls/46"}}}}]), \
-             patch.object(board, "api", side_effect=[(issue, None), ({"merged_at": "2026-09-18T13:00:00Z"}, None)]):
-            self.assertEqual(board.first_ship_date(issue), "2026-09-18")
+        for will_close, closing_commit, expected in ((True, None, "2026-09-18"),
+                (False, "merge", "2026-09-18"), (False, "other", "2026-09-23"),
+                (False, None, "2026-09-23")):
+            timeline = [{"will_close_target": will_close, "source": {"issue": {
+                "pull_request": {"url": "https://api.github.com/repos/Cubatica/orca/pulls/46"}}}},
+                {"event": "closed", "commit_id": closing_commit}]
+            with self.subTest(will_close=will_close, closing_commit=closing_commit), \
+                 patch.object(board, "pages", return_value=timeline), \
+                 patch.object(board, "datetime") as clock, \
+                 patch.object(board, "api", side_effect=[(issue, None),
+                     ({"merged_at": "2026-09-18T13:00:00Z", "merge_commit_sha": "merge"}, None)]):
+                clock.now.return_value.isoformat.return_value = "2026-09-23T00:00:00Z"
+                self.assertEqual(board.first_ship_date(issue), expected)
 
     def test_running_for(self):
         self.assertEqual(format_elapsed(25 * 3600), "25:00:00")

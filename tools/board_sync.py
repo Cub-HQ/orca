@@ -11,10 +11,10 @@ def projects_for(repo):
     return PROJECTS if repo == "Cubatica/fitness-coach" else (4,)
 
 
-# Current pipeline stage number shown when an issue is at each board stage (11 total:
-# intake build review rework re-review qa rebase merge deploy live-test verdict)
-STEPS_DONE = {"Queued": 0, "Triage": 1, "Building": 2, "In review": 3, "QA": 6, "Deploying": 9, "Live test": 10, "Shipped": 11}
-TOTAL = 11
+# Pipeline milestones, not board columns (12 jobs including Admission).
+# admission intake build review rework re-review qa rebase merge deploy live-test verdict
+STEPS_DONE = {"Queued": 0, "Triage": 2, "Building": 3, "In review": 4, "QA": 7, "Deploying": 10, "Live test": 11, "Shipped": 12}
+TOTAL = 12
 
 
 def api(path, method="GET", body=None):
@@ -87,12 +87,16 @@ def first_ship_date(issue, existing=None):
         closed = issue.get("closed_at")
         if not closed:
             merged = []
-            for event in pages(f"{path}/timeline?per_page=100"):
+            timeline = list(pages(f"{path}/timeline?per_page=100"))
+            closing_commits = {event["commit_id"] for event in timeline
+                               if event.get("event") == "closed" and event.get("commit_id")}
+            for event in timeline:
                 source = (event.get("source") or {}).get("issue") or {}
                 pull = source.get("pull_request") or {}
                 if pull.get("url"):
                     pr, _ = api(pull["url"])
-                    if pr.get("merged_at"):
+                    if pr.get("merged_at") and (event.get("will_close_target") is True
+                                               or pr.get("merge_commit_sha") in closing_commits):
                         merged.append(pr["merged_at"])
             closed = min(merged) if merged else None
     return (closed or datetime.now(timezone.utc).isoformat())[:10]
