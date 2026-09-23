@@ -21,6 +21,24 @@ class DeriveStageTest(unittest.TestCase):
             ("open", [], False, None, "Queued"),
             ("open", [], False, "Human Review Needed", "Queued"),
         ]
+        for label in ("factory:needs-you", "actions:needs-info", "factory:needs-info",
+                      "actions:parked", "factory:awaiting-review", "factory:awaiting-merge",
+                      "factory:awaiting-user-review", "factory:needs-plan"):
+            cases.extend([("open", [label], False, "Queued", "Human Review Needed"),
+                          ("open", [label, "factory:blocked"], True, "QA", "Human Review Needed"),
+                          ("closed", [label], True, "QA", "Shipped")])
+        for job, expected in (("Intake", "Building"), ("Build", "Building"),
+                              ("Rework", "Building"), ("Review", "In review"),
+                              ("Re-review", "In review"), ("Source QA (read-only)", "QA"),
+                              ("Rebase", "Deploying"), ("Merge PR", "Deploying"),
+                              ("Deploy", "Deploying"), ("Live Slack desktop acceptance", "Live test")):
+            with self.subTest(job=job):
+                self.assertEqual(derive_stage("open", [], True, "Building", job), expected)
+                self.assertEqual(derive_stage("open", [], False, "Building", job), "Queued")
+                self.assertEqual(derive_stage("open", ["factory:awaiting-review"], True,
+                                              "Building", job), "Human Review Needed")
+        self.assertEqual(derive_stage("open", [], True, "Live test", "Verdict"), "Live test")
+        self.assertEqual(derive_stage("open", [], True, "Building", "unknown"), "Building")
         for stage in ("In review", "QA", "Deploying", "Live test"):
             cases.extend([("open", [], True, stage, stage),
                           ("open", [], False, stage, "Queued")])
