@@ -149,7 +149,7 @@ Start with ## DF_Reviewer. Explain evidence, tests actually run, and findings in
 Findings use stable FINDING_ID=path::symbol::invariant; keep each OPEN or RESOLVED on its finding line.
 Include exactly one HEAD_SHA={data['head_sha']} line and end with exactly DF_REVIEW=approve or DF_REVIEW=block.
 Do not invent proof or approve/block because infrastructure failed. If evidence cannot support a verdict, leave no verdict file.
-Do not write timing/model metadata; the runner measures it. Finish early enough to allow posting within the budget.
+Start a clock before tools. At halfway, state supported findings and remaining uncertainty; do not reread unchanged evidence without a concrete contradiction. At 75% of BUDGET_SECONDS, stop new reads/tests and write the supported final verdict to the supplied verdict.txt, not chat. If evidence is insufficient, report what is missing instead of inventing a verdict. The runner owns timing/model metadata.
 '''
     (state / 'run-brief.txt').write_text(brief)
     started = time.monotonic()
