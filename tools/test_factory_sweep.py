@@ -61,7 +61,7 @@ class DeriveStageTest(unittest.TestCase):
                 "stage": {"name": "Queued"}, "why": {"text": ""},
                 "running_for": {"text": "?"}}
         fields = {"Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}
-        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+        with patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
              patch.object(factory_sweep, "board_items", return_value=[item]), \
              patch.object(factory_sweep.board_sync, "update_item") as update, \
@@ -74,13 +74,16 @@ class DeriveStageTest(unittest.TestCase):
             item["why"]["text"] = "orchestrator direct"
             self.assertEqual(factory_sweep.reconcile_board(issues, {}), 0)
             with patch.object(factory_sweep, "snapshot", return_value=(issues, set(), {}, {})), \
-                 patch.object(factory_sweep, "gh", side_effect=AssertionError("must not requeue direct work")):
+                 patch.object(factory_sweep, "recent_closed", return_value=[]), \
+             patch.object(factory_sweep, "gh", side_effect=AssertionError("must not requeue direct work")):
                 factory_sweep.main()
 
     def test_board_routing(self):
         board = factory_sweep.board_sync
-        for repo, expected in (("fitness-coach", [3, 4]), ("omp-config-backup", [4]),
-                               ("df-fixture", [4]), ("orca", [4])):
+        for repo, expected in (("fitness-coach", [3, "orgs/Cub-HQ/projectsV2/1", 4, "orgs/Cub-HQ/projectsV2/2"]),
+                               ("omp-config-backup", [4, "orgs/Cub-HQ/projectsV2/2"]),
+                               ("df-fixture", [4, "orgs/Cub-HQ/projectsV2/2"]),
+                               ("orca", [4, "orgs/Cub-HQ/projectsV2/2"])):
             with self.subTest(repo=repo), \
                  patch.object(board.sys, "argv", ["board_sync.py", "--repo", f"Cub-HQ/{repo}",
                                                    "--issue", "45", "--stage", "Human Review Needed"]), \
@@ -89,18 +92,24 @@ class DeriveStageTest(unittest.TestCase):
                 board.main()
                 self.assertEqual([call.args[0] for call in sync.call_args_list], expected)
 
-    def test_foreign_item_never_updated_on_fitness_board(self):
-        item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
-                "repository": {"nameWithOwner": "Cub-HQ/omp-config-backup"}},
-                "stage": {"name": "Queued"}}
-        with patch.object(factory_sweep, "R", "Cub-HQ/omp-config-backup"), \
-             patch.object(factory_sweep.board_sync, "PROJECTS", (3, 4)), \
-             patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
-             patch.object(factory_sweep, "board_items", return_value=[item]), \
-             patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
-            self.assertEqual(factory_sweep.reconcile_board(
-                [{"n": 45, "labs": ["factory:awaiting-review"]}], {}), 1)
-        self.assertEqual([call.args[0] for call in update.call_args_list], [4])
+    def test_missing_issue_uses_node_id_and_add_failure_is_loud(self):
+        board = factory_sweep.board_sync
+        issue = {"number": 45, "node_id": "I_issue", "state": "open",
+                 "url": "https://api.github.com/repos/Cub-HQ/omp-config-backup/issues/45",
+                 "labels": [], "updated_at": "2026-09-23T00:00:00Z"}
+        fields = {"Workflow Stage": {"id": 1, "options": [{"id": "queued", "name": {"raw": "Queued"}}]},
+                  "Running For": {"id": 2}}
+        with patch.object(board, "project_fields", return_value=fields), \
+             patch.object(factory_sweep, "board_items", return_value=[]), \
+             patch.object(board, "projects_for", return_value=(4,)), \
+             patch.object(board, "sync_project", side_effect=RuntimeError("forced add failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced add failure"):
+                factory_sweep.reconcile_board([{"n": 45, "labs": [], "issue": issue}], {})
+        with patch.object(board, "project_id", return_value="PVT_project"), \
+             patch.object(board, "graphql", return_value={"addProjectV2ItemById": {"item": {"databaseId": 90}}}) as graphql:
+            self.assertEqual(board.add_item(4, issue)["id"], 90)
+        self.assertEqual(graphql.call_args.args[1], {"project": "PVT_project", "content": "I_issue"})
+
 
     def test_orchestrator_action_repairs_stage_and_why(self):
         reason = "orchestrator handling - not Josh"
@@ -113,7 +122,7 @@ class DeriveStageTest(unittest.TestCase):
                     "repository": {"nameWithOwner": factory_sweep.R}},
                     "stage": {"name": current}, "why": {"text": why}}
             with self.subTest(current=current, why=why), \
-                 patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                 patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
                  patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
                  patch.object(factory_sweep, "board_items", return_value=[item]), \
                  patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
@@ -145,7 +154,7 @@ class DeriveStageTest(unittest.TestCase):
                         "repository": {"nameWithOwner": factory_sweep.R}},
                         "stage": {"name": "Human Review Needed" if expected == "Blocked" else "Blocked"},
                         "why": {"text": "Blocked by: old dependency"}}
-                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                with patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value=fields), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "api") as api, patch("builtins.print"):
@@ -196,7 +205,7 @@ class DeriveStageTest(unittest.TestCase):
                 item = {"databaseId": 45, "content": {"number": 45, "state": "OPEN",
                         "repository": {"nameWithOwner": factory_sweep.R}}, "stage": {"name": "(unset)"}}
                 with patch.object(factory_sweep, "gh", side_effect=github), \
-                     patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                     patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value={
                          "Running For": {"id": 1}, "Why Awaiting Human": {"id": 2}}), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
@@ -235,7 +244,7 @@ class DeriveStageTest(unittest.TestCase):
                     issues, active, running, jobs = factory_sweep.snapshot()
                 self.assertEqual(active, {31} if queued else set())
                 self.assertEqual(running, {})
-                with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+                with patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
                      patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
                      patch.object(factory_sweep, "board_items", return_value=[item]), \
                      patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
@@ -274,7 +283,7 @@ class DeriveStageTest(unittest.TestCase):
                             row["fields"].append({"name": "Shipped At", "value": update["value"] + "T00:00:00+00:00"})
                         if update["id"] == 3:
                             row["fields"][0]["value"]["name"]["raw"] = update["value"]
-                with patch.object(board, "PROJECTS", (4,)), \
+                with patch.object(board, "projects_for", return_value=(4,)), \
                      patch.object(board, "project_fields", return_value=fields), \
                      patch.object(board, "pages", return_value=[row]) as pages, \
                      patch.object(board, "api", side_effect=persist) as api, patch("builtins.print"):
@@ -335,13 +344,28 @@ class DeriveStageTest(unittest.TestCase):
             with self.subTest(stage=stage):
                 self.assertEqual(running_for(stage, "2026-09-23T00:00:00Z", 1790125261), "")
 
+    def test_backfill_does_not_spend_stage_correction_cap(self):
+        missing = [{"n": n, "labs": [], "issue": {"number": n, "node_id": f"I_{n}",
+                    "state": "open", "url": f"https://api.github.com/repos/{factory_sweep.R}/issues/{n}"}}
+                   for n in range(35)]
+        item = {"databaseId": 100, "content": {"number": 100, "state": "OPEN",
+                "repository": {"nameWithOwner": factory_sweep.R}}, "stage": {"name": "Building"}}
+        with patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
+             patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
+             patch.object(factory_sweep, "board_items", return_value=[item]), \
+             patch.object(factory_sweep.board_sync, "sync_project") as add, \
+             patch.object(factory_sweep.board_sync, "update_item") as update, patch("builtins.print"):
+            self.assertEqual(factory_sweep.reconcile_board(missing + [{"n": 100, "labs": []}], {}), 36)
+        self.assertEqual(len(add.call_args_list), 35)
+        self.assertTrue(all(call.kwargs == {"known_missing": True} for call in add.call_args_list))
+        self.assertEqual(len(update.call_args_list), 1)
     def test_durations_continue_after_correction_cap(self):
         items = [{"databaseId": n, "content": {"number": n, "state": "OPEN",
                   "repository": {"nameWithOwner": factory_sweep.R}},
                   "stage": {"name": "Queued"}} for n in range(101)]
         issues = [{"n": n, "labs": []} for n in range(101)]
         running = {n: "2026-09-23T00:00:00Z" for n in range(101)}
-        with patch.object(factory_sweep.board_sync, "PROJECTS", (4,)), \
+        with patch.object(factory_sweep.board_sync, "projects_for", return_value=(4,)), \
              patch.object(factory_sweep.board_sync, "project_fields", return_value={"Running For": {"id": 1}}), \
              patch.object(factory_sweep, "board_items", return_value=items), \
              patch.object(factory_sweep.board_sync, "update_item") as update, \
