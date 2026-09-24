@@ -1,0 +1,291 @@
+name: df-lean
+run-name: 'Lean #${{ inputs.issue }}'
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        required: true
+        type: string
+concurrency:
+  group: df-lean-${{ inputs.issue }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  R: ${{ github.repository }}
+  ISSUE: ${{ inputs.issue }}
+  GH_TOKEN: model-has-no-github-access
+defaults:
+  run:
+    shell: bash
+jobs:
+  # Credentials only run on disposable hosted runners, never alongside omp.
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pr: ${{ steps.prepare.outputs.pr }}
+      merged: ${{ steps.prepare.outputs.merged }}
+    steps:
+      - &token
+        uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ secrets.FACTORY_APP_ID }}
+          private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+          owner: Cub-HQ
+      - &checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 0
+      - id: prepare
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]]
+          D="$RUNNER_TEMP/inputs"
+          mkdir -p "$D"
+          SHA=$(gh api repos/Cub-HQ/omp-config-backup/commits/main --jq .sha)
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/Cub-HQ/omp-config-backup/contents/agent/config.yml?ref=$SHA" > "$D/config.yml"
+          for card in DF_Builder DF_Reviewer DF_QA; do
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/Cub-HQ/omp-config-backup/contents/agent/agents/$card.md?ref=$SHA" > "$D/$card.md"
+          done
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/Cub-HQ/omp-config-backup/contents/agent/AGENTS.md?ref=$SHA" > "$D/AGENTS.md"
+          printf '%s\n' "$SHA" > "$D/omp-sha"
+          gh api "repos/$R/issues/$ISSUE" --jq '.title + "\n" + .body' > "$D/issue"
+          BRANCH="actions/issue-$ISSUE"
+          PR=$(gh api "repos/$R/pulls?state=all&head=${R%/*}:$BRANCH" --jq '[.[] | select(.state == "open" or .merged_at != null)] | .[0].number // empty')
+          MERGED=''
+          if [ -n "$PR" ]; then
+            MERGED=$(gh api "repos/$R/pulls/$PR" --jq 'if .merged then .merge_commit_sha else "" end')
+          fi
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "merged=$MERGED" >> "$GITHUB_OUTPUT"
+          cat "$D/DF_Builder.md" "$D/AGENTS.md" "$D/issue" > "$D/build-brief"
+          gh api --paginate "repos/$R/issues/$ISSUE/comments?per_page=100" | jq -rs '[.[][] | select(.body | startswith("Lean failure:"))] | last | .body // ""' >> "$D/build-brief"
+          if [ -n "$PR" ]; then
+            gh api --paginate "repos/$R/issues/$PR/comments?per_page=100" | jq -rs '[.[][] | select(.body | startswith("## DF_Reviewer"))] | last | .body // ""' >> "$D/build-brief"
+          fi
+          printf '\nWork in this checkout on %s. Rebase on origin/main if needed. Only edit and commit locally; do not push, open a PR, post comments, merge or deploy. The workflow publishes after you finish. Ignore legacy plan/tier/budget/size paperwork. Last line DF_BUILD=done or DF_FAIL=the actual error.\n' "$BRANCH" >> "$D/build-brief"
+          if [ -n "$PR" ] && [ -z "$MERGED" ]; then git checkout "$BRANCH"; else git checkout -B "$BRANCH" origin/main; fi
+          git bundle create "$D/source.bundle" "refs/heads/$BRANCH" refs/remotes/origin/main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lean-inputs
+          path: ${{ runner.temp }}/inputs/
+          retention-days: 7
+          if-no-files-found: error
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.merged == ''
+    runs-on: [self-hosted, hetzner, heavy]
+    permissions: {}
+    timeout-minutes: 60
+    steps:
+      - &inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: lean-inputs
+          path: ${{ runner.temp }}/lean-${{ github.run_id }}-${{ github.run_attempt }}/inputs
+      - &workspace
+        name: Create credential-free local checkout
+        run: |
+          # Drain tee before annotating; keep Bash errexit and the original status.
+          STEP_LOG="$RUNNER_TEMP/workspace.log"
+          exec 3>&1 4>&2
+          exec > >(tee "$STEP_LOG") 2>&1
+          TEE_PID=$!
+          trap 'RC=$?; exec 1>&3 2>&4; wait "$TEE_PID" || :; if [ "$RC" -ne 0 ]; then LAST=$(sed "/^[[:space:]]*$/d" "$STEP_LOG" | tail -1); case "$LAST" in ::error::*) ;; *) printf "::error::%s\n" "${LAST//%/%25}" ;; esac; fi; exit "$RC"' EXIT
+          D="$RUNNER_TEMP/lean-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          W=$(mktemp -d "$RUNNER_TEMP/lean-work.XXXXXX")
+          git -c core.hooksPath=/dev/null clone "$D/inputs/source.bundle" "$W"
+          git -C "$W" config credential.helper ''
+          git -C "$W" config core.hooksPath /dev/null
+          git -C "$W" fetch "$D/inputs/source.bundle" refs/remotes/origin/main:refs/remotes/origin/main
+          git -C "$W" remote set-url origin "https://github.com/$R.git"
+          echo "WORK=$W" >> "$GITHUB_ENV"
+          echo "OMP_CANONICAL=$D/inputs" >> "$GITHUB_ENV"
+          echo /opt/homebrew/bin >> "$GITHUB_PATH"
+          echo /Users/joshuabretag/.local/npm-global/bin >> "$GITHUB_PATH"
+      - name: Build locally without publishing credentials
+        run: |
+          STEP_LOG="$RUNNER_TEMP/build-step.log"
+          exec 3>&1 4>&2
+          exec > >(tee "$STEP_LOG") 2>&1
+          TEE_PID=$!
+          trap 'RC=$?; exec 1>&3 2>&4; wait "$TEE_PID" || :; if [ "$RC" -ne 0 ]; then LAST=$(sed "/^[[:space:]]*$/d" "$STEP_LOG" | tail -1); case "$LAST" in ::error::*) ;; *) printf "::error::%s\n" "${LAST//%/%25}" ;; esac; fi; exit "$RC"' EXIT
+          cd "$WORK"
+          BRANCH="actions/issue-$ISSUE"
+          git checkout "$BRANCH"
+          git config user.name 'Factory Bot'
+          git config user.email 'factory-bot@users.noreply.github.com'
+          env -u GITHUB_TOKEN -u READ_TOKEN -u CHECKS_TOKEN GH_CONFIG_DIR="$(mktemp -d)" GH_TOKEN=model-has-no-github-access GIT_CONFIG_GLOBAL=/dev/null omp --config "$OMP_CANONICAL/config.yml" -p --model @df-build "@$OMP_CANONICAL/build-brief" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          LAST=$(sed '/^[[:space:]]*$/d' "$RUNNER_TEMP/build.log" | tail -1)
+          if [ "$LAST" != DF_BUILD=done ]; then echo "::error::$LAST"; exit 1; fi
+          test "$(git symbolic-ref HEAD)" = "refs/heads/$BRANCH"
+          git bundle create "$WORK/build.bundle" "refs/heads/$BRANCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lean-build
+          path: ${{ env.WORK }}/build.bundle
+          retention-days: 7
+          if-no-files-found: error
+  publish:
+    needs: [prepare, build]
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.prepare.outputs.merged != '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pr: ${{ steps.publish.outputs.pr }}
+      head: ${{ steps.publish.outputs.head }}
+    steps:
+      - *token
+      - *checkout
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.merged == ''
+        with:
+          name: lean-build
+          path: ${{ runner.temp }}/build
+      - id: publish
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.prepare.outputs.pr }}
+          MERGED: ${{ needs.prepare.outputs.merged }}
+        run: |
+          STEP_LOG="$RUNNER_TEMP/publish-step.log"
+          exec 3>&1 4>&2
+          exec > >(tee "$STEP_LOG") 2>&1
+          TEE_PID=$!
+          trap 'RC=$?; exec 1>&3 2>&4; wait "$TEE_PID" || :; if [ "$RC" -ne 0 ]; then LAST=$(sed "/^[[:space:]]*$/d" "$STEP_LOG" | tail -1); case "$LAST" in ::error::*) ;; *) printf "::error::%s\n" "${LAST//%/%25}" ;; esac; fi; exit "$RC"' EXIT
+          BRANCH="actions/issue-$ISSUE"
+          if [ -z "$MERGED" ]; then
+            git -c core.hooksPath=/dev/null fetch "$RUNNER_TEMP/build/build.bundle" "refs/heads/$BRANCH:refs/heads/lean-publish"
+            git -c core.hooksPath=/dev/null -c credential.helper='!gh auth git-credential' push --force-with-lease origin "refs/heads/lean-publish:refs/heads/$BRANCH"
+            if [ -z "$PR" ]; then PR=$(gh api -X POST "repos/$R/pulls" -f head="$BRANCH" -f base=main -f title="Issue #$ISSUE: $(git log -1 --format=%s lean-publish)" -f body="Implements issue #$ISSUE. Built locally; published by the trusted workflow." --jq .number); fi
+          fi
+          HEAD=$(gh api "repos/$R/pulls/$PR" --jq .head.sha)
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          git -c credential.helper='!gh auth git-credential' fetch origin "$HEAD"
+          git branch lean-review "$HEAD"
+          git bundle create "$RUNNER_TEMP/review.bundle" refs/heads/lean-review refs/remotes/origin/main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lean-review-source
+          path: ${{ runner.temp }}/review.bundle
+          retention-days: 7
+          if-no-files-found: error
+  review:
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.prepare.outputs.merged == '' }}
+    runs-on: [self-hosted, hetzner, heavy]
+    permissions: {}
+    timeout-minutes: 60
+    steps:
+      - *inputs
+      - uses: actions/download-artifact@v4
+        with:
+          name: lean-review-source
+          path: ${{ runner.temp }}/lean-${{ github.run_id }}-${{ github.run_attempt }}/review
+      - *workspace
+      - name: Review exact head without publishing credentials
+        env:
+          HEAD: ${{ needs.publish.outputs.head }}
+          PR: ${{ needs.publish.outputs.pr }}
+        run: |
+          STEP_LOG="$RUNNER_TEMP/review-step.log"
+          exec 3>&1 4>&2
+          exec > >(tee "$STEP_LOG") 2>&1
+          TEE_PID=$!
+          trap 'RC=$?; exec 1>&3 2>&4; wait "$TEE_PID" || :; if [ "$RC" -ne 0 ]; then LAST=$(sed "/^[[:space:]]*$/d" "$STEP_LOG" | tail -1); case "$LAST" in ::error::*) ;; *) printf "::error::%s\n" "${LAST//%/%25}" ;; esac; fi; exit "$RC"' EXIT
+          cd "$WORK"
+          git fetch "$OMP_CANONICAL/../review/review.bundle" refs/heads/lean-review
+          git checkout --detach "$HEAD"
+          cat "$OMP_CANONICAL/DF_Reviewer.md" "$OMP_CANONICAL/AGENTS.md" "$OMP_CANONICAL/issue" > "$WORK/review-brief"
+          printf '\nReview PR #%s at exact HEAD_SHA=%s. No edits, commits, merge, deployment, tiers, budgets, size limits or checksum bundles. Do not post a verdict yourself. Last line: DF_REVIEW=approve or DF_REVIEW=block.\n' "$PR" "$HEAD" >> "$WORK/review-brief"
+          env -u GITHUB_TOKEN -u READ_TOKEN -u CHECKS_TOKEN GH_CONFIG_DIR="$(mktemp -d)" GH_TOKEN=model-has-no-github-access GIT_CONFIG_GLOBAL=/dev/null omp --config "$OMP_CANONICAL/config.yml" -p --model @df-review "@$WORK/review-brief" 2>&1 | tee "$WORK/review.log"
+          LAST=$(sed '/^[[:space:]]*$/d' "$WORK/review.log" | tail -1)
+          if [[ ! "$LAST" =~ ^DF_REVIEW=(approve|block)$ ]]; then echo "::error::$LAST"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lean-review-verdict
+          path: ${{ env.WORK }}/review.log
+          retention-days: 7
+          if-no-files-found: error
+  merge:
+    needs: [prepare, publish, review]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && (needs.review.result == 'success' || needs.prepare.outputs.merged != '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - *token
+      - *checkout
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.merged == ''
+        with:
+          name: lean-review-verdict
+          path: ${{ runner.temp }}/verdict
+      - id: merge
+        name: Post bound verdict, wait for CI, merge exact head
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD: ${{ needs.publish.outputs.head }}
+          PR: ${{ needs.publish.outputs.pr }}
+          SHA: ${{ needs.prepare.outputs.merged }}
+          BOT: ${{ steps.token.outputs.app-slug }}[bot]
+        run: |
+          STEP_LOG="$RUNNER_TEMP/merge-step.log"
+          exec 3>&1 4>&2
+          exec > >(tee "$STEP_LOG") 2>&1
+          TEE_PID=$!
+          trap 'RC=$?; exec 1>&3 2>&4; wait "$TEE_PID" || :; if [ "$RC" -ne 0 ]; then LAST=$(sed "/^[[:space:]]*$/d" "$STEP_LOG" | tail -1); case "$LAST" in ::error::*) ;; *) printf "::error::%s\n" "${LAST//%/%25}" ;; esac; fi; exit "$RC"' EXIT
+          if [ -z "$SHA" ]; then
+            LOG="$RUNNER_TEMP/verdict/review.log"
+            { printf '## DF_Reviewer\nHEAD_SHA=%s\n\n' "$HEAD"; cat "$LOG"; } | jq -Rs '{body: .}' | gh api -X POST "repos/$R/issues/$PR/comments" --input -
+            LAST=$(sed '/^[[:space:]]*$/d' "$LOG" | tail -1)
+            if [ "$LAST" != DF_REVIEW=approve ]; then echo '::error::DF_REVIEW=block; see the reviewer comment on the PR'; exit 1; fi
+            while :; do
+              RUN=$(gh api "repos/$R/actions/workflows/ci.yml/runs?head_sha=$HEAD&event=pull_request" --jq '.workflow_runs[0] | [.status,.conclusion] | @tsv')
+              if [[ "$RUN" == completed$'\t'success ]]; then break; fi
+              if [[ "$RUN" == completed* ]]; then echo "::error::ci.yml $RUN"; exit 1; fi
+              sleep 15
+            done
+            gh api --paginate "repos/$R/issues/$PR/comments?per_page=100" | jq -s -e --arg bot "$BOT" --arg head "$HEAD" '
+              [ .[][] | select(.user.login == $bot) | select(.body | startswith("## DF_Reviewer\nHEAD_SHA=" + $head + "\n")) ] | last | .body | rtrimstr("\n") | endswith("DF_REVIEW=approve")'
+            gh api -X PUT "repos/$R/pulls/$PR/merge" -f sha="$HEAD" | tee "$RUNNER_TEMP/merge.json"
+            jq -e '.merged == true' "$RUNNER_TEMP/merge.json"
+            SHA=$(jq -r .sha "$RUNNER_TEMP/merge.json")
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          gh api -X POST "repos/$R/issues/$ISSUE/comments" -f body="PR #$PR merged at $SHA. Independent review and CI passed. This repository has no deployment stage."
+          gh api -X PATCH "repos/$R/issues/$ISSUE" -f state=closed
+  verdict:
+    needs: [prepare, build, publish, review, merge]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - *token
+      - name: Quote failure and retry at most five times
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REF: ${{ github.ref_name }}
+          BOT: ${{ steps.token.outputs.app-slug }}[bot]
+        run: |
+          JOB=$(gh api "repos/$R/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | [.name,.check_run_url] | @tsv' | head -1)
+          STAGE=${JOB%%$'\t'*}; CHECK=${JOB#*$'\t'}
+          ERROR=$(gh api "$CHECK/annotations" --jq '([.[] | select(.annotation_level == "failure")][0].message // "Job failed without an error annotation") | split("\n")[0]')
+          N=$(gh api --paginate "repos/$R/issues/$ISSUE/comments?per_page=100" | jq -s --arg bot "$BOT" '[.[][] | select(.user.login == $bot) | .body | capture("^Lean failure:.*\\nAuto-retry (?<n>[0-5])/5"; "s")? | .n | tonumber] | (max // 0) + 1')
+          N=$((N > 5 ? 5 : N))
+          BODY=$(printf 'Lean failure: %s\nAuto-retry %s/5\n\n%s\n\n%s' "$STAGE" "$N" "$ERROR" "https://github.com/$R/actions/runs/$GITHUB_RUN_ID")
+          gh api -X POST "repos/$R/issues/$ISSUE/comments" -f body="$BODY"
+          if [ "$N" -ge 5 ]; then
+            gh api -X POST "repos/$R/issues/$ISSUE/labels" -f 'labels[]=factory:needs-you'
+          else
+            gh api -X POST "repos/$R/actions/workflows/df-lean.yml/dispatches" -f ref="$REF" -f "inputs[issue]=$ISSUE"
+          fi

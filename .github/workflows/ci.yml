@@ -1,0 +1,20 @@
+name: ci
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: [self-hosted, hetzner, heavy]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/install-node-dependencies
+        with:
+          native-runtime: node
+      - name: Install Electron package binary for tests
+        run: node config/scripts/install-electron-package-binary.mjs
+      - name: Full Orca typecheck and test suite
+        run: |
+          pnpm run typecheck
+          pnpm test
