@@ -245,7 +245,7 @@ jobs:
         esac
         if [ "$G" = go ] && [ "$(printf '%s\n' "$B" | jq -Rs '[split("\n")[] | select(startswith("FAST_LANE="))] == ["FAST_LANE=orch-direct"]')" = true ]; then
           gh api -X POST "repos/$R/issues/$ISSUE/comments" -f body='Routed to orchestrator - small fix lane' >/dev/null
-          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f 'labels[]=factory:orch-direct' >/dev/null
+          python3 "$RECEIPTS" stage-label --label factory:orch-direct
           gh api -X DELETE "repos/$R/issues/$ISSUE/labels/actions%3Ago" >/dev/null 2>&1 || true
           G=orch-direct
         else
@@ -328,8 +328,7 @@ jobs:
         R: "${{ github.repository }}"
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:building" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:building
       if: steps.resume.outputs.skip != 'true'
     - name: Received ← Intake
       env:
@@ -480,8 +479,7 @@ jobs:
         R: "${{ github.repository }}"
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:pr-open" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:pr-open
       if: steps.resume.outputs.skip != 'true'
     - name: Checkout exact open PR head
       if: steps.resume.outputs.skip != 'true'
@@ -659,8 +657,7 @@ jobs:
         R: "${{ github.repository }}"
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:building" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:building
       if: steps.resume.outputs.skip != 'true'
     - name: Received ← Review
       env:
@@ -813,8 +810,7 @@ jobs:
         R: "${{ github.repository }}"
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:pr-open" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:pr-open
       if: steps.resume.outputs.skip != 'true'
     - name: Checkout exact open PR head
       if: steps.resume.outputs.skip != 'true'
@@ -995,8 +991,7 @@ jobs:
         R: "${{ github.repository }}"
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:reviewed" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:reviewed
       if: steps.resume.outputs.skip != 'true'
     - name: Received ← Review
       env:
@@ -1309,8 +1304,7 @@ jobs:
       run: |
         python3 "$RECEIPTS" guard --stage ship
         export PATH="/opt/homebrew/bin:$PATH"
-        for L in building pr-open reviewed awaiting-review blocked merged deployed; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
-        gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:merged" >/dev/null 2>&1 || true
+        python3 "$RECEIPTS" stage-label --label factory:merged
       if: steps.resume.outputs.skip != 'true'
     - name: Merge and close
       env:
@@ -1440,11 +1434,11 @@ jobs:
           done
           if [ "$ROUTE" = "JOSH" ]; then
             mark "actions:parked"
-            gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:needs-you" >/dev/null
+            python3 "$RECEIPTS" stage-label --label factory:needs-you
             say "$(printf '## For Josh\n\n**What happened:** %s\n\n**Next automatically:** Repairs are paused. Start your reply with Answer: followed by your answer. That sends this back to the factory.\n\n**Josh needed: Yes.** %s\n\n**The actual findings, quoted:**\n\n%s' "$WHY" "$ASK" "$FINDINGS")"
             STG="Waiting on Josh"
           else
-            gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:orch-action" >/dev/null
+            python3 "$RECEIPTS" stage-label --label factory:orch-action
             say "$(printf '## Orchestrator action needed\n\n%s' "$FINDINGS")"
             if [ "$(printf '%s' "$DEPENDENCY" | jq -r '.kind // "none"')" = "none" ]; then
               say "Auto-retry $((RETRIES+1))/5: What happened: this repair did not finish. Next automatically: the factory coordinator will use the findings above for the next repair attempt. Josh needed: No."
@@ -1539,7 +1533,7 @@ jobs:
         fi
         for L in building pr-open reviewed awaiting-review blocked merged deployed needs-info needs-you; do gh api -X DELETE "repos/$R/issues/$ISSUE/labels/factory%3A$L" >/dev/null 2>&1 || true; done
         if [ -n "$FL" ]; then
-          gh api -X POST "repos/$R/issues/$ISSUE/labels" -f "labels[]=factory:$FL" >/dev/null 2>&1 || true
+          python3 "$RECEIPTS" stage-label --label "factory:$FL"
         fi
         {
           echo "# Factory outcome: the whole story in one place"

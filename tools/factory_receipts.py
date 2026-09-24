@@ -3,7 +3,7 @@
 
 R, ISSUE, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT identify the caller.
 Commands: admission; guard [--stage ship] [--pr N]; resume STAGE;
-record STAGE [--value done]; revoke; selfcheck. All support --pr N.
+record STAGE [--value done]; stage-label --label factory:NAME; revoke; selfcheck. All support --pr N.
 Producer fix must name an exact PR changed-file path (quote paths with spaces).
 Outputs are printed and appended to GITHUB_OUTPUT. API errors fail closed.
 """
@@ -21,6 +21,7 @@ STAGES = ('intake', 'build', 'review1', 'rework', 'review2', 'qa', 'rebase', 'sh
 TOKENS = {'intake': 'INTAKE', 'build': 'DF_PR', 'review1': 'DF_REVIEW', 'review2': 'DF_REVIEW', 'rework': 'DF_REWORK', 'qa': 'DF_QA'}
 VALUES = {'intake': ('go', 'needs-info', 'orch-direct'), 'review1': ('approve', 'block'), 'review2': ('approve', 'block'), 'qa': ('pass', 'fail'), 'rework': ('done',)}
 PRODUCER_FIELDS = ('Producer', 'Producer fix', 'Regeneration proof')
+LABEL_ATTEMPTS = 3
 
 
 def bug_issue(issue):
@@ -98,6 +99,29 @@ class Factory:
 
     def comments(self, number):
         return self.api(self.root + '/issues/' + str(number) + '/comments?per_page=100', pages=True)
+
+    def issue_labels(self):
+        return list(self.api(self.root + '/issues/' + self.issue).get('labels', []))
+
+    def stage_label(self, label):
+        if not re.fullmatch(r'factory:[a-z0-9-]+', label or ''):
+            raise RuntimeError('stage label must be factory:<name>')
+        for _ in range(LABEL_ATTEMPTS):
+            labels = self.issue_labels()
+            stages = sorted({row.get('name', '') for row in labels if row.get('name', '').startswith('factory:')})
+            if stages == [label]:
+                return {'label': label, 'converged': 'true'}
+            for current in stages:
+                if current != label:
+                    try:
+                        self.api(self.root + '/issues/' + self.issue + '/labels/' + current, 'DELETE')
+                    except RuntimeError as error:
+                        if '404' not in str(error):
+                            raise
+            if label not in stages:
+                self.api(self.root + '/issues/' + self.issue + '/labels', 'POST', {'labels': [label]})
+        stages = sorted(row.get('name', '') for row in self.issue_labels() if row.get('name', '').startswith('factory:'))
+        raise RuntimeError('factory stage did not converge to ' + label + ' after ' + str(LABEL_ATTEMPTS) + ' attempts; observed=' + json.dumps(stages))
 
     def producer_changed(self, proof, pull):
         paths = {next(value for value in match if value) for match in re.findall(
@@ -426,9 +450,10 @@ def selfcheck():
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('operation', choices=('admission', 'guard', 'resume', 'record', 'revoke', 'selfcheck'))
+    p.add_argument('operation', choices=('admission', 'guard', 'resume', 'record', 'stage-label', 'revoke', 'selfcheck'))
     p.add_argument('stage', nargs='?', choices=STAGES)
     p.add_argument('--stage', dest='guard_stage', choices=STAGES)
+    p.add_argument('--label')
     p.add_argument('--pr', type=int, default=int(os.environ['PR']) if os.environ.get('PR', '').isdigit() else None)
     p.add_argument('--value')
     p.add_argument('--source-run', type=int)
@@ -442,6 +467,8 @@ def main():
         result = f.admission(a.source_run)
     elif a.operation == 'revoke':
         result = f.revoke()
+    elif a.operation == 'stage-label':
+        result = f.stage_label(a.label)
     elif a.operation == 'guard':
         result = f.release_guard(a.guard_stage or a.stage, a.pr)
     else:
