@@ -6,6 +6,8 @@ Commands: admission; guard [--stage ship] [--pr N]; resume STAGE;
 record STAGE [--value done]; revoke; selfcheck. All support --pr N.
 Producer fix must name an exact PR changed-file path (quote paths with spaces).
 Outputs are printed and appended to GITHUB_OUTPUT. API errors fail closed.
+Review REASON/RETRYABLE metadata survives durable records. Budget failures never
+authorize reuse or release; split-required is usable only as a block.
 """
 import argparse
 import hashlib
@@ -72,6 +74,25 @@ def trusted(comment):
 def token(body, name):
     found = re.findall(r'^' + re.escape(name) + r'=([^\r\n]+)\r?$', body, re.M)
     return found[0].strip() if len(found) == 1 else ''
+
+
+def review_metadata(body):
+    metadata = {}
+    for name in ('REASON', 'RETRYABLE'):
+        if re.search(r'^' + name + '=', body, re.M):
+            value = token(body, name)
+            if not value:
+                return {'retryable': 'true'}  # Ambiguous machine metadata fails closed.
+            metadata[name.lower()] = value
+    return metadata
+
+
+def review_usable(value, reason='', retryable=''):
+    """Timeouts are not verdicts; split-required is reusable only as a block."""
+    if not isinstance(reason, str) or str(retryable).lower() not in ('', 'false'):
+        return False
+    reason = reason.partition(':')[0].strip().lower()
+    return reason != 'budget-exceeded' and (reason != 'split-required' or value == 'block')
 
 
 def records(comments):
@@ -181,6 +202,9 @@ class Factory:
         for row in reversed(rows):
             if row.get('kind') != 'stage' or row.get('stage') != stage or row.get('fingerprint') != fingerprint(issue):
                 continue
+            if stage in ('review1', 'review2') and not review_usable(
+                    row.get('value'), row.get('reason', ''), row.get('retryable', '')):
+                continue
             if stage in ('build', 'rework') and bug_issue(issue):
                 proof = row.get('producer_proof') or {}
                 if (not isinstance(proof, dict)
@@ -217,6 +241,9 @@ class Factory:
                 continue
             if stage in VALUES and value not in VALUES[stage]:
                 continue
+            metadata = review_metadata(body) if stage in ('review1', 'review2') else {}
+            if stage in ('review1', 'review2') and not review_usable(value, **metadata):
+                continue
             if fresh and c.get('created_at', '') < run['run_started_at']:
                 continue
             explicit = token(body, 'ISSUE_FINGERPRINT') == fingerprint(issue)
@@ -236,7 +263,7 @@ class Factory:
                     continue
             if stage == 'intake' and value == 'go' and token(body, 'FAST_LANE') == 'orch-direct':
                 value = 'orch-direct'
-            result = {'value': value, 'evidence': c['id'], **({'producer_proof': proof} if proof else {})}
+            result = {'value': value, 'evidence': c['id'], **metadata, **({'producer_proof': proof} if proof else {})}
             if stage in ('review1', 'review2'):
                 tier, model = token(body, 'TIER'), token(body, 'MODEL')
                 try:

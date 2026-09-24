@@ -396,9 +396,7 @@ jobs:
         B=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$R/issues/$ISSUE/comments" --paginate --jq '[.[] | select(.body|startswith("DF_PR="))] | last | .body')
         printf '%s\n' "$B"
         printf '### Hand-off → Review\n\n%s\n\n_Passed to Review as: the DF_PR comment on issue #%s plus the PR diff._\n\n' "$B" "$ISSUE" >> "$GITHUB_STEP_SUMMARY"
-        N=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$R/pulls?head=Cub-HQ:actions/issue-$ISSUE&state=open" --jq '.[0].number')
-        echo "pr=$N" >> "$GITHUB_OUTPUT"
-        test -n "$N" && test "$N" != null
+        python3 "$RECEIPTS" guard --stage build
       if: steps.resume.outputs.skip != 'true'
     - name: Save current-state completion receipt
       if: success() && steps.resume.outputs.skip != 'true'
@@ -527,6 +525,8 @@ jobs:
         cd "$W"
         python3 "$REVIEW_TIER" --base "$DIFF_BASE" --head "$REVIEW_HEAD" --repo "$R"
     - name: Independent review
+      id: review
+      continue-on-error: true
       if: steps.resume.outputs.skip != 'true'
       timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
       env:
@@ -539,6 +539,20 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+        python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
+    - name: Retry budget-exceeded review once
+      if: steps.review.outputs.budget_retry == 'true'
+      timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
+      env:
+        READ_TOKEN: "${{ github.token }}"
+        MODEL: "${{ steps.tier.outputs.model }}"
+        EFFORT: "${{ steps.tier.outputs.effort }}"
+        TIER: "${{ steps.tier.outputs.tier }}"
+        MINUTES: "${{ steps.tier.outputs.minutes }}"
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        jq -e '.retryable == true and .reason == "budget-exceeded"' "$REVIEW_STATE/result.json"
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: General Info
       id: gi
@@ -581,7 +595,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       run: |
         set -euo pipefail
-        V=$(jq -er --arg sha "$HEAD_SHA" 'select(.head_sha == $sha) | .verdict | select(. == "approve" or . == "block")' "$REVIEW_STATE/result.json")
+        V=$(jq -er --arg sha "$HEAD_SHA" 'select(.head_sha == $sha and .retryable != true) | .verdict | select(. == "approve" or . == "block")' "$REVIEW_STATE/result.json")
         echo "verdict=$V" >> "$GITHUB_OUTPUT"
         echo "verdict: $V"
     - name: Save current-state completion receipt
@@ -860,6 +874,8 @@ jobs:
         cd "$W"
         python3 "$REVIEW_TIER" --base "$DIFF_BASE" --head "$REVIEW_HEAD" --repo "$R"
     - name: Scoped re-review
+      id: review
+      continue-on-error: true
       if: steps.resume.outputs.skip != 'true'
       timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
       env:
@@ -872,6 +888,20 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+        python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
+    - name: Retry budget-exceeded review once
+      if: steps.review.outputs.budget_retry == 'true'
+      timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
+      env:
+        READ_TOKEN: "${{ github.token }}"
+        MODEL: "${{ steps.tier.outputs.model }}"
+        EFFORT: "${{ steps.tier.outputs.effort }}"
+        TIER: "${{ steps.tier.outputs.tier }}"
+        MINUTES: "${{ steps.tier.outputs.minutes }}"
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        jq -e '.retryable == true and .reason == "budget-exceeded"' "$REVIEW_STATE/result.json"
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: General Info
       id: gi
@@ -914,7 +944,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       run: |
         set -euo pipefail
-        V=$(jq -er --arg sha "$HEAD_SHA" 'select(.head_sha == $sha) | .verdict | select(. == "approve" or . == "block")' "$REVIEW_STATE/result.json")
+        V=$(jq -er --arg sha "$HEAD_SHA" 'select(.head_sha == $sha and .retryable != true) | .verdict | select(. == "approve" or . == "block")' "$REVIEW_STATE/result.json")
         echo "verdict=$V" >> "$GITHUB_OUTPUT"
         echo "verdict: $V"
     - name: Save current-state completion receipt
@@ -1700,6 +1730,11 @@ jobs:
 
 '
       if: steps.candidate.outputs.already_merged != 'true'
+    - name: Prepare strict workflow validator
+      if: steps.candidate.outputs.already_merged != 'true'
+      run: |
+        python3 -m venv "$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/venv"
+        "$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/venv/bin/python" -m pip install PyYAML==6.0.3
     - name: Run the authoritative neutral check once
       id: gate
       env:
@@ -1709,7 +1744,7 @@ jobs:
         PR: "${{ needs.build.outputs.pr }}"
         BASE: "${{ steps.candidate.outputs.base }}"
         CANDIDATE: "${{ steps.candidate.outputs.candidate }}"
-      run: 'python3 "$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/factory_merge_gate.py" --repo
+      run: '"$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/venv/bin/python" "$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/factory_merge_gate.py" --repo
         "$R" --base-sha "$BASE" --candidate-sha "$CANDIDATE" --skip-list "$RUNNER_TEMP/neutral-$GITHUB_RUN_ID/known-env-skips.json"
 
 '

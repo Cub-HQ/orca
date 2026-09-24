@@ -69,6 +69,13 @@ class ReviewTierTest(unittest.TestCase):
                 self.assertEqual(data['effort'], {'a': 'low', 'b': 'medium', 'c': 'high'}[tier])
                 self.assertEqual(data['model'], 'oauth-pool/claude-opus-5' if tier == 'c' else 'oauth-pool/grok-4.6')
 
+    def test_boundary_default_assignment(self):
+        for identifier in ('DEFAULT_ROLE', 'defaultPrincipal', 'default_policy'):
+            for path, tier in (('authz.py', 'c'), ('display.py', 'b'), ('authz.md', 'a')):
+                with self.subTest(identifier=identifier, path=path):
+                    data = self.classify(path, f"{identifier} = 'user'\n", f"{identifier} = 'admin'\n")
+                    self.assertEqual(data['tier'], tier)
+
     def test_omp_always_five_minutes(self):
         for path, before, after, tier in [
             ('notes.md', 'old', 'new', 'a'),
