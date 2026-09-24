@@ -66,3 +66,4 @@ Be mindful of the user's `gh` CLI API rate limit — batch requests where possib
 
 The `factory-stragglers` workflow coalesces superseded events in its dedicated cancellable group while the sweep job retains the non-cancelling `df-straggler-sweep` lock with `queue: max`.
 The scheduled sweep has a 150-second process-group deadline inside its three-minute job budget; timeout or cancellation kills nested transports and defers incomplete work to the next tick.
+Standing-rulings briefs preserve the complete canonical Josh’s-laws section. Only optional decision history and recalled lessons share a 64 KiB UTF-8 budget; missing, malformed, or unavailable laws stop the run.

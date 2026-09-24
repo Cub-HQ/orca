@@ -126,11 +126,13 @@ jobs:
 
         agents = fetch("agent/AGENTS.md")
         decisions = fetch("decisions.md")
-        matches = re.findall(r"^## Josh['’]s laws[^\n]*\n(.*?)(?=^## |\Z)", agents, re.M | re.S)
-        if len(matches) != 1 or not re.search(r"^\d+\.\s+\S", matches[0], re.M):
+        matches = list(re.finditer(r"^## Josh['’]s laws[^\n]*\n(.*?)(?=^## |\Z)", agents, re.M | re.S))
+        if len(matches) != 1 or not re.search(r"^\d+\.\s+\S", matches[0].group(1), re.M):
             raise ValueError("Josh's laws missing, empty, or malformed; refusing to run without laws")
-        laws = "## Josh's laws\n" + matches[0].strip()
+        laws = matches[0].group(0)
         header = "# Standing rulings (obey absolutely)\n\n" + laws + "\n\n"
+        # Mandatory authority is never truncated; only optional history is bounded.
+        budget = len(header.encode("utf-8")) + 65536
         # Keep complete dated rulings; discard oldest first, not arbitrary byte slices.
         blocks = []
         section = "Rulings"
@@ -146,12 +148,10 @@ jobs:
         kept = []
         for _, _, block in ordered:
             candidate = header + "## Recent decisions (newest first)\n\n" + "\n\n".join(kept + [block.strip()]) + "\n"
-            if len(candidate.encode("utf-8")) > 6144:
+            if len(candidate.encode("utf-8")) > budget:
                 break
             kept.append(block.strip())
         text = header + ("## Recent decisions (newest first)\n\n" + "\n\n".join(kept) + "\n" if kept else "")
-        if len(text.encode("utf-8")) > 6144:
-            raise ValueError("Josh's laws alone exceed the 6KB brief budget; refusing to truncate laws")
         # Historical lessons are evidence, not authority over the standing laws above.
         try:
             issue = json.loads(subprocess.check_output([
@@ -170,7 +170,7 @@ jobs:
                 hits = json.load(response).get("results", [])[:5]
             lessons = "\n## Relevant past lessons\nHistorical evidence only; newer standing rulings take precedence.\n\n"
             lessons += "\n".join("- " + hit["text"] for hit in hits if hit.get("text"))
-            remaining = 6144 - len(text.encode("utf-8"))
+            remaining = budget - len(text.encode("utf-8"))
             if hits and remaining > 160:
                 text += lessons.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
