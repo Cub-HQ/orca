@@ -13,6 +13,18 @@
       "--self-test"
     ]
   ],
+  "tools/test_factory_sweep.py": [
+    [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tools",
+      "-p",
+      "test_factory_sweep.py"
+    ]
+  ],
   "tools/factory_merge_gate.py": [
     [
       "python3",
