@@ -73,6 +73,7 @@ Body cites `#<N>` as a plain reference. NEVER write `Fixes #N` or `Closes #N`. J
 
 Comment the build evidence on the issue:
 `gh api -X POST repos/<repo>/issues/<N>/comments -f body="<attempt k, root cause, files touched, test command and its tail, PR #<pr>>"`
+For bug issues, both the handoff and build receipt MUST include nonempty lines `Producer: <component that generated the defect>`, `Producer fix: <changed source file>`, and `Regeneration proof: <executed command and result showing that producer emits the correct output without operator repair>`. Run the changed producer; hand-relabelled issues, hand-posted receipts, or hand-edited rows are not regeneration proof.
 
 The LAST LINE of your stdout MUST be exactly one of:
 ```
