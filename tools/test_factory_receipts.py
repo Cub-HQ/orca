@@ -174,6 +174,45 @@ class ProducerReceiptGateTest(unittest.TestCase):
         self.factory.record('build', 7)
         self.assertEqual(self.factory.resume('build', 7)['skip'], 'true')
 
+    def test_machine_review_native_durable_and_release_gates(self):
+        import json
+        from factory_receipts import PREFIX
+
+        self.receipt(self.proof)
+        self.factory.record('build', 7)
+        self.factory.resume('qa', 7)
+        self.comment('DF_QA=pass\nHEAD_SHA=' + self.pull['head']['sha'])
+        self.factory.record('qa', 7)
+        self.factory.resume('review1', 7)
+        for verdict in ('approve', 'block'):
+            for metadata in ({'retryable': 'true'}, {'reason': 'budget-exceeded'},
+                             {'reason': 'split-required: split into PRs under 64KB by file group'}):
+                if verdict == 'block' and metadata.get('reason', '').startswith('split-required'):
+                    continue
+                with self.subTest(verdict=verdict, metadata=metadata):
+                    native = self.comment('DF_REVIEW=' + verdict + '\nHEAD_SHA=' + self.pull['head']['sha'] +
+                                          ''.join('\n' + k.upper() + '=' + v for k, v in metadata.items()))
+                    with self.assertRaises(RuntimeError):
+                        self.factory.record('review1', 7)
+                    self.comments.remove(native)
+                    durable = self.comment(PREFIX + json.dumps(dict(
+                        kind='stage', stage='review1', owner=self.factory.owner,
+                        fingerprint=fingerprint(self.issue), pr=7, head_sha=self.pull['head']['sha'],
+                        value=verdict, **metadata)))
+                    self.assertEqual(self.factory.resume('review1', 7)['skip'], 'false')
+                    for stage in ('ship', 'deploy', 'acceptance'):
+                        with self.assertRaises(RuntimeError):
+                            self.factory.release_guard(stage, 7)
+                    self.comments.remove(durable)
+        reason = 'split-required: split into PRs under 64KB by file group'
+        self.comment('DF_REVIEW=block\nHEAD_SHA=' + self.pull['head']['sha'] + '\nREASON=' + reason)
+        self.assertEqual(self.factory.record('review1', 7)['verdict'], 'block')
+        self.assertEqual(self.factory.resume('review1', 7)['verdict'], 'block')
+        row = json.loads(self.comments[-1]['body'][len(PREFIX):])
+        self.assertEqual(row['reason'], reason)
+        with self.assertRaises(RuntimeError):
+            self.factory.release_guard('ship', 7)
+
     def test_bug_issue_type_also_requires_proof(self):
         for metadata in ({'labels': [{'name': 'type:bug'}]}, {'labels': [], 'type': {'name': 'Bug'}}):
             self.issue.update(metadata)

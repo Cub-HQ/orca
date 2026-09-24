@@ -167,17 +167,54 @@ class ReviewCLI(unittest.TestCase):
         self.prepare()
         self.assertEqual(json.loads((self.state / 'result.json').read_text())['verdict'], 'approve')
 
-    def test_deadline_emits_retry_metrics_not_verdict(self):
+    def test_deadline_retries_once_then_routes_split(self):
         self.prepare()
         (self.checkout / 'sleep-review').touch()
         self.cli('run', '--tier', 'A', '--model', 'oauth-pool/test', '--effort', 'low', '--minutes', '0.02', code=75)
         result = json.loads((self.state / 'result.json').read_text())
         self.assertTrue(result['retryable'])
-        self.assertGreaterEqual(result['review_seconds'], 0.9)
+        self.assertEqual(result['reason'], 'budget-exceeded')
         writes = [json.loads(line) for line in self.posts.read_text().splitlines()]
-        self.assertEqual(len(writes), 1)
-        self.assertIn('/issues/77/comments', writes[0][1])
-        self.assertNotIn('DF_REVIEW=', writes[0][2]['body'])
+        body = writes[0][2]['body']
+        self.assertTrue(body.endswith('DF_REVIEW=block'))
+        self.cli('run', '--tier', 'A', '--model', 'oauth-pool/test', '--effort', 'low', '--minutes', '0.02')
+        result = json.loads((self.state / 'result.json').read_text())
+        self.assertFalse(result['retryable'])
+        self.assertTrue(result['reason'].startswith('split-required'))
+        self.set_data(comments=[dict(id=1, author_association='MEMBER', body=body)])
+        self.prepare()
+        self.assertEqual(json.loads((self.state / 'state.json').read_text())['reuse'], 'false')
+        self.assertEqual(json.loads((self.state / 'state.json').read_text())['budget_failures'], 1)
+
+    def test_large_full_diff_routes_split_without_model(self):
+        (self.checkout / 'large').write_text('x' * 65537)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'large change')
+        self.head = self.git('rev-parse', 'HEAD')
+        self.set_data(comments=[self.receipt('approve')])
+        self.prepare()
+        self.assertEqual(json.loads((self.state / 'state.json').read_text())['reuse'], 'false')
+        (self.bin / 'omp').unlink()
+        self.cli('run', '--tier', 'c', '--model', 'oauth-pool/test', '--effort', 'high', '--minutes', '5')
+        result = json.loads((self.state / 'result.json').read_text())
+        self.assertEqual(result['verdict'], 'block')
+        self.assertTrue(result['reason'].startswith('split-required'))
+        self.assertFalse((self.state / 'review.jsonl').exists())
+
+    def test_workflow_rulings_reach_reviewer_brief(self):
+        self.env['STANDING_RULINGS'] = 'Never publish private athlete data.'
+        self.prepare()
+        self.env.pop('STANDING_RULINGS')
+        self.cli('run', '--tier', 'c', '--model', 'oauth-pool/test', '--effort', 'high', '--minutes', '5')
+        self.assertIn('Trusted standing rulings from the workflow:\nNever publish private athlete data.',
+                      (self.state / 'run-brief.txt').read_text())
+
+    def test_retryable_approval_never_reuses(self):
+        receipt = self.receipt('approve')
+        receipt['body'] += '\nRETRYABLE=true\nREASON=budget-exceeded'
+        self.set_data(comments=[receipt])
+        self.prepare()
+        self.assertEqual(json.loads((self.state / 'state.json').read_text())['reuse'], 'false')
 
     def test_moved_head_is_retryable_without_post(self):
         self.prepare()

@@ -73,6 +73,19 @@ def discover(start, rows, stream=None, pattern='test*.py'):
     return result.wasSuccessful()
 
 
+def validate_workflow_yaml(path):
+    import yaml
+
+    class UniqueLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            keys = [key.value for key, _ in node.value]
+            if len(keys) != len(set(keys)):
+                raise ValueError(f'duplicate YAML mapping key in {path}')
+            return super().construct_mapping(node, deep=deep)
+
+    return yaml.load(Path(path).read_text(), Loader=UniqueLoader)
+
+
 def omp_gate(base, smoke_path, yaml_command):
     changed = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=ACMR', '-z', base, 'HEAD']).decode().split('\0')
     smoke = json.loads(Path(smoke_path).read_text()) if smoke_path else {}
@@ -151,6 +164,9 @@ def main():
         raise ValueError('checkout HEAD must equal the full candidate SHA')
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.base_sha, actual], check=True)
     repo = args.repo.removeprefix('Cub-HQ/')
+    if repo == 'orca':
+        for workflow in sorted(Path('.github/workflows').glob('*.y*ml')):
+            validate_workflow_yaml(workflow)
     if repo == 'fitness-coach':
         os.chdir('runtime')
         sys.path.insert(0, str(Path.cwd()))

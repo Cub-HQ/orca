@@ -89,7 +89,10 @@ def classify(base, head, repo):
         tier = max(tier, 'b')
         # Token spacing is restored for matching compound identifiers/commands.
         changed_code = re.sub(r'([a-z])([A-Z])', r'\1_\2', '\n'.join(changed))
-        decision = re.search(r'\b(?:if|return|allow(?:ed)?|deny|require(?:d)?)\b', changed_code)
+        decision = re.search(
+            r'\b(?:if|return|allow(?:ed)?|deny|require(?:d)?)\b'
+            r'|\b(?:default[_-]?(?:role|principal|policy)|(?:role|principal|policy)[_-]?default)\s*=(?!=)',
+            changed_code, re.IGNORECASE)
         if BOUNDARIES.search(changed_code) or boundary_guard or (decision and BOUNDARIES.search(path)):
             tier = 'c'
     omp = repo.rsplit('/', 1)[-1].lower() == 'omp-config-backup'
