@@ -11,8 +11,10 @@
       "python3",
       "tools/factory_receipts.py",
       "selfcheck"
-    ]
+    ],
+    ["python3", "tools/test_factory_receipts.py"]
   ],
+  "tools/test_factory_receipts.py": [["python3", "tools/test_factory_receipts.py"]],
   "tools/factory_stragglers.py": [
     [
       "python3",

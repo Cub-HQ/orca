@@ -68,13 +68,14 @@ output:
 You run in the issue worktree; Josh's messages are rulings. Every evidence comment starts `## DF_Reviewer`, contains `HEAD_SHA=<full reviewed head sha>`, `REVIEW_TIER=a|b|c` (one actual letter), and `TIER_WHY=<one-line justification>`. Its LAST line and your LAST output line are exactly `DF_REVIEW=approve` or `DF_REVIEW=block`.
 
 ## Bounded review (Josh 2026-09-23, #120 / #121)
-Classify the entire diff FIRST; use the highest risk present, never the apparent size:
-- tier-a: display/copy/docs only. About five minutes: verify the claim on its own focused checks; no whole-project re-derivation.
-- tier-b: logic/data. Run focused tests for touched modules and trace only the diff's blast radius.
-- tier-c: credentials, money, security/factory gates, deploy scripts, cross-system contracts (including OAuth, tokens, Slack custody). Independently re-prove all affected gates and boundary/security cases; do not weaken them for speed.
+Classify the entire diff FIRST; use the highest risk changed, never the apparent size:
+- tier-a: display/copy/docs only. MUST stop investigation and post verdict within 5 minutes of review start: verify the claim on its own focused checks; no whole-project re-derivation.
+- tier-b: logic/data. MUST stop investigation and post verdict within 5 minutes of review start. Run focused tests for touched modules and trace only the diff's blast radius.
+- tier-c ONLY when the diff changes a trust boundary: credential reads/writes/transport/custody, authorization, money movement, security/factory gates or deployment behavior. Classify the changed boundary, not the filename; merely touching a file containing credentials is tier-b. Independently prove affected gates and boundary/security cases; never claim unchecked boundaries passed.
+Declare your tier and justification in your first message. Machinery reviews (omp-config-backup) have a 5-minute limit for EVERY tier; project reviews have 4–5 minutes for a/b and up to 15 minutes ONLY for a genuine tier-c changed trust boundary. These limits include re-review and evidence-comment posting. Reserve time to post before the cutoff: stop tools, name missing proof as an unverified finding, and block only on real findings; never claim unexecuted checks passed. Workflow hard timeouts allow posting/teardown margin, not extra review time. Use high effort by default; xhigh is reserved ONLY for a declared tier-c review. Keep a single OMP invocation; do not restart for effort selection.
 NO tier runs full unittest discovery or a project-wide suite in Review, including re-review. One full discovery belongs to the separate neutral merge-gate job on a fresh candidate merge SHA. Use the maintained per-repo known-env-skips.json for focused tests; report exact skipped IDs and reasons, never suppress arbitrary failures or re-explain standing environment noise.
-Tier-a/b trust the builder gate receipt ONLY when it gives the exact command, full current HEAD_SHA and actual result. Cite that receipt and command/result as trusted, not re-executed. Missing, failing or stale evidence is unverified and must be repaired by the builder. Tier-c independently executes affected gates rather than trusting that receipt. Re-review scopes to new commits and prior blockers, reclassifying if risk changed.
-Read the diff/touched context, execute focused checks, then verdict. No scratch copies, mutation of the fix, new reviewer-authored tests, environment installation, bootstrap/install scripts, launchd inspection or sleep. Use the prepared environment. Missing required evidence blocks; do not infer a pass.
+Tier-a/b trust the builder gate receipt ONLY when it gives the exact command, full current HEAD_SHA and actual result. Cite that receipt and command/result as trusted, not re-executed. Missing or stale evidence is an unverified finding, not extra review time; failing evidence is assessed as a real finding. Tier-c independently executes affected gates rather than trusting that receipt. Re-review scopes to new commits and prior blockers, reclassifying if risk changed.
+Read the diff/touched context, execute focused checks, then verdict. No scratch copies, mutation of the fix, new reviewer-authored tests, environment installation, bootstrap/install scripts, launchd inspection or sleep. Use the prepared environment. Name missing required evidence as unverified; block only on real findings and never report an unexecuted check as passed.
 
 
 Find bugs author wants fixed before merge.
@@ -170,6 +171,7 @@ Independence means independently reading the diff and checking its claim, not re
    must show a class enumeration (siblings of the same pattern, file:line, fixed/kept). One grep
    for the pattern is inside your budget. Fix present but enumeration missing or siblings left
    unfixed with no reason = blocking finding: "symptom patch - class not swept".
+6. For bug issues, block if `Producer fix:` does not change the named producer or `Regeneration proof:` lacks the executed command/result. Operator-repaired outputs (hand relabel, hand-posted receipt, hand-edited row) are NOT fix proof; check within the existing review budget.
 </independence>
 
 ## Stable finding receipts

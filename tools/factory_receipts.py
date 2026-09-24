@@ -18,6 +18,25 @@ PREFIX = 'DF_PIPELINE_V1='
 STAGES = ('intake', 'build', 'review1', 'rework', 'review2', 'qa', 'rebase', 'ship', 'deploy', 'acceptance')
 TOKENS = {'intake': 'INTAKE', 'build': 'DF_PR', 'review1': 'DF_REVIEW', 'review2': 'DF_REVIEW', 'rework': 'DF_REWORK', 'qa': 'DF_QA'}
 VALUES = {'intake': ('go', 'needs-info', 'orch-direct'), 'review1': ('approve', 'block'), 'review2': ('approve', 'block'), 'qa': ('pass', 'fail'), 'rework': ('done',)}
+PRODUCER_FIELDS = ('Producer', 'Producer fix', 'Regeneration proof')
+
+
+def bug_issue(issue):
+    return ((issue.get('type') or {}).get('name', '').casefold() == 'bug'
+            or any(label['name'].casefold() in ('bug', 'type:bug') for label in issue.get('labels', [])))
+
+
+def producer_proof(body):
+    proof = {}
+    for field in PRODUCER_FIELDS:
+        values = re.findall(r'^' + re.escape(field) + r':[ \t]*([^\r\n]*)\r?$', body, re.M)
+        value = values[0].strip() if len(values) == 1 else ''
+        if (not any(c.isalnum() for c in value)
+                or re.match(r'^(?:todo|tbd|pending|unknown|none|n/?a|not applicable)(?:\b|$)', value, re.I)
+                or re.fullmatch(r'<[^>]*>|\[[^\]]*\]', value)):
+            return {}
+        proof[field] = value
+    return proof
 
 
 def api(path, method='GET', data=None, pages=False):
@@ -149,6 +168,12 @@ class Factory:
         for row in reversed(rows):
             if row.get('kind') != 'stage' or row.get('stage') != stage or row.get('fingerprint') != fingerprint(issue):
                 continue
+            if stage in ('build', 'rework') and bug_issue(issue):
+                proof = row.get('producer_proof') or {}
+                if (not isinstance(proof, dict)
+                        or not producer_proof('\n'.join(f'{k}: {v}' for k, v in proof.items()))
+                        or not pull or row.get('head_sha') != pull['head']['sha']):
+                    continue
             if stage != 'intake':
                 if not pull or str(row.get('pr')) != str(pull['number']):
                     continue
@@ -190,9 +215,14 @@ class Factory:
                     continue
                 if stage == 'build' and value != str(pull['number']):
                     continue
+            proof = {}
+            if stage in ('build', 'rework') and bug_issue(issue):
+                proof = producer_proof(body)
+                if not proof:
+                    continue
             if stage == 'intake' and value == 'go' and token(body, 'FAST_LANE') == 'orch-direct':
                 value = 'orch-direct'
-            return {'value': value, 'evidence': c['id']}
+            return {'value': value, 'evidence': c['id'], **({'producer_proof': proof} if proof else {})}
         return None
 
     def result(self, stage, row, pull):
@@ -223,6 +253,10 @@ class Factory:
         if stage in ('ship', 'deploy', 'acceptance'):
             if not pull:
                 raise RuntimeError('release requires a PR')
+            if bug_issue(issue) and not any(
+                    self.native(s, issue, run, comments, rows, pull) or self.matching(s, issue, rows, pull)
+                    for s in ('build', 'rework')):
+                raise RuntimeError('current PR SHA lacks Producer:, Producer fix:, Regeneration proof: evidence')
             reviews = [self.matching(s, issue, rows, pull) for s in ('review1', 'review2')]
             reviews = [r for r in reviews if r]
             native = self.native('review1', issue, run, comments, rows, pull)

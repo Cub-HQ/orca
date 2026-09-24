@@ -10,6 +10,8 @@ cancel-in-progress:false, distinct from the pipeline issue concurrency group.
 Only authenticated workflow code may write the marker prefix. Do not run from
 untrusted PR checkouts. Dispatch transport ambiguity is retained, never retried;
 the receipt explicitly requests reconciliation rather than risking duplicates.
+Active Review/Re-review runs defer to GitHub's step/job timeouts, including setup;
+the generic inactivity recycler must not shorten their configured deadlines.
 """
 import argparse
 import hashlib
@@ -79,6 +81,13 @@ def stamp(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00'))
 
 
+def protected_run(jobs):
+    # Whole-run cancellation would also kill a review or live-acceptance sibling.
+    return any(job['status'] == 'in_progress' and (
+        job['name'] in {'Review', 'Re-review'} or
+        (job['name'] not in WORK and 'acceptance' in job['name'].lower())) for job in jobs)
+
+
 def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dispatch_ref='main'):
     now = now or datetime.now(timezone.utc)
     root = f'repos/{repo}'
@@ -146,11 +155,7 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
                 jobs = [job for page in call(
                     f"{root}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100", pages=True)
                         for job in page['jobs']]
-                # A running live-acceptance sibling prohibits whole-run cancellation.
-                live = any(job['status'] == 'in_progress' and job['name'] not in WORK
-                           and 'acceptance' in job['name'].lower()
-                           for job in jobs)
-                if not live:
+                if not protected_run(jobs):
                     stalled = next((job for job in jobs if job['status'] == 'in_progress'
                                     and job['name'] in WORK and job.get('started_at')
                                     and (now - stamp(job['started_at'])).total_seconds() > 1800), None)
@@ -189,9 +194,7 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
                                          and job['name'] == record['job']
                                          and job.get('started_at') == record['started_at']
                                          for job in current_jobs)
-                        live = any(job['status'] == 'in_progress' and job['name'] not in WORK
-                                   and 'acceptance' in job['name'].lower() for job in current_jobs)
-                        if not same_stall or live:
+                        if not same_stall or protected_run(current_jobs):
                             record['state'] = 'superseded'
                             save(n, record, comment_id)
                             report.append(dict(record))
@@ -235,6 +238,17 @@ def sweep(repo, current_ref, workflow='df-pipeline.yml', call=api, now=None, dis
 def self_test():
     import copy
     now = datetime(2026, 9, 23, 12, tzinfo=timezone.utc)
+    stale = {'name': 'Build', 'status': 'in_progress', 'started_at': '2026-09-23T10:00:00Z'}
+    for name in ('Review', 'Re-review'):
+        review = dict(stale, name=name)
+        for steps in ([], [{'name': 'Prepare runtime', 'status': 'in_progress',
+                            'started_at': '2026-09-23T10:30:00Z'}],
+                      [{'name': 'Independent review', 'status': 'in_progress',
+                        'started_at': '2026-09-23T11:29:59Z'}]):
+            review['steps'] = steps
+            assert protected_run([stale, review])
+        for status in ('queued', 'waiting', 'completed'):
+            assert not protected_run([dict(review, status=status), stale])
     issues = {n: {'state': 'open', 'title': f'Issue {n}', 'body': 'scope', 'labels': []}
               for n in range(1, 9)}
     runs = [{'id': n, 'display_title': f'#{n} work', 'head_sha': 'old' if n < 3 else 'unrelated',
@@ -247,6 +261,8 @@ def self_test():
     jobs[6][0]['started_at'] = '2026-09-23T11:30:00Z'
     jobs[7][0]['status'] = 'queued'
     jobs[8][0]['status'] = 'waiting'
+    jobs[7][0].update(name='Review', status='in_progress')
+    jobs[8].append(dict(jobs[3][0], name='Re-review'))
     def fake(url, method='GET', data=None, pages=False):
         route = url.split('/repos/', 1)[-1] if '/repos/' in url else url
         if '/commits/' in route:
@@ -292,6 +308,16 @@ def self_test():
     sweep('owner/repo', 'main', call=fake, now=now)
     sweep('owner/repo', 'main', call=fake, now=now)
     assert effects[-1] == ('dispatch', 2) and len(effects) == 5, effects
+    # Revalidate old cancellation receipts: active review now protects the run.
+    jobs[3].append(dict(jobs[3][0], name='Re-review'))
+    runs[2]['status'] = 'in_progress'
+    prior = marker(comments[3][0])
+    prior['state'] = 'cancel-requested'
+    comments[3][0]['body'] = PREFIX + json.dumps(prior) + ' -->'
+    sweep('owner/repo', 'main', call=fake, now=now)
+    assert len(effects) == 5
+    assert marker(comments[3][0])['state'] == 'superseded'
+    print('PASS: active Review/Re-review protect setup, mixed jobs and pending cancellation receipts')
     # Deferred upgrade observes closure and scope changes rather than restarting.
     for state in ('closed', 'changed'):
         runs[1]['status'] = 'in_progress'
