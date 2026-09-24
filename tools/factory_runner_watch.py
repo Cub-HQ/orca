@@ -322,6 +322,8 @@ def recover_fast(repo, api=gh):
                 or {r["name"] for r in fleet} != fleet_names
                 or any(not {"self-hosted", "hetzner"} <= labels(r) for r in fleet)):
             raise RuntimeError("Pilot fleet inventory incomplete; refusing label changes")
+        if any(r.get("status") not in ("online", "offline") for r in fleet):
+            raise RuntimeError("Pilot runner status unknown; refusing label changes")
         return runners
 
     def labels(runner):

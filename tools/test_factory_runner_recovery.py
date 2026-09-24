@@ -106,6 +106,24 @@ class RecoveryCLI(unittest.TestCase):
         self.assertEqual(self.run_cli(data), data)
         self.assertEqual((self.root / 'reads').read_text(), 'GET\n')
 
+    def test_unknown_pilot_status_refuses_before_writes(self):
+        for status in (None, 'unknown', 'missing'):
+            for role in ('fast', 'heavy', 'overlapping-fast', 'zero-fast'):
+                with self.subTest(status=status, role=role):
+                    data = state()
+                    index = 7 if role == 'heavy' else 0
+                    if role == 'overlapping-fast':
+                        data['runners'][1]['labels'].append({'name': 'fast'})
+                    elif role == 'zero-fast':
+                        data['runners'][0]['labels'] = [
+                            v for v in data['runners'][0]['labels'] if v['name'] != 'fast']
+                    if status == 'missing':
+                        del data['runners'][index]['status']
+                    else:
+                        data['runners'][index]['status'] = status
+                    self.assertEqual(self.run_cli(data, success=False), data)
+                    self.assertEqual((self.root / 'reads').read_text(), 'GET\n')
+
     def test_failures_readback_and_next_run(self):
         for operation in ([102, 'POST', 'fast'], [101, 'POST', 'heavy'],
                           [101, 'DELETE', 'fast'], [102, 'DELETE', 'heavy']):
