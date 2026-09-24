@@ -183,7 +183,7 @@ def watch(repo, api=gh, board=block_board, now=None):
             comment = save(number, comment, record)
             claimed_runs.add(record["run"])
             api(f"{root}/actions/workflows/{record['workflow']}/dispatches", "POST",
-                {"ref": record["ref"], "inputs": {"issue": str(number), "runner": "self-hosted"}})
+                {"ref": record["ref"], "inputs": {"issue": str(number)}})
             record["phase"] = "dispatched"
             record["explanation"] += " Self-hosted fallback dispatched after confirmed cancellation. Live jobs retain their self-hosted route."
             save(number, comment, record)
@@ -246,7 +246,7 @@ def self_test():
                 return deepcopy(run)
             if path.endswith("/dispatches"):
                 assert run["status"] == "completed" and run["conclusion"] == "cancelled"
-                assert data == {"ref": "main", "inputs": {"issue": "8", "runner": "self-hosted"}}
+                assert data == {"ref": "main", "inputs": {"issue": "8"}}
                 return None
             raise AssertionError(path)
         for _ in range(2):
