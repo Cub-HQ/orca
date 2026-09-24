@@ -1,4 +1,28 @@
 {
+  "tools/review_tier": [
+    [
+      "python3",
+      "tools/test_review_tier.py"
+    ]
+  ],
+  "tools/test_review_tier.py": [
+    [
+      "python3",
+      "tools/test_review_tier.py"
+    ]
+  ],
+  "tools/review_run.py": [
+    [
+      "python3",
+      "tools/test_review_run.py"
+    ]
+  ],
+  "tools/test_review_run.py": [
+    [
+      "python3",
+      "tools/test_review_run.py"
+    ]
+  ],
   "tools/factory_merge_gate.py": [
     [
       "python3",
@@ -12,9 +36,17 @@
       "tools/factory_receipts.py",
       "selfcheck"
     ],
-    ["python3", "tools/test_factory_receipts.py"]
+    [
+      "python3",
+      "tools/test_factory_receipts.py"
+    ]
   ],
-  "tools/test_factory_receipts.py": [["python3", "tools/test_factory_receipts.py"]],
+  "tools/test_factory_receipts.py": [
+    [
+      "python3",
+      "tools/test_factory_receipts.py"
+    ]
+  ],
   "tools/factory_stragglers.py": [
     [
       "python3",
