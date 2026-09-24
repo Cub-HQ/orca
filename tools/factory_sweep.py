@@ -6,10 +6,13 @@ Fixes, without asking:
 - issues with actions:go but no live/queued run for >20 min -> dispatch the existing issue
 Leaves alone: needs-plan, umbrella PRDs, and true waiting labels.
 """
+import argparse
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
 import board_sync
 import time
 from datetime import datetime
@@ -249,5 +252,41 @@ def main():
     print("sweep done")
 
 
+def cli():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--timeout-seconds', type=float, default=150,
+                        help='whole sweep deadline, at most 150 seconds (macOS/Linux)')
+    parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if not 0 < args.timeout_seconds <= 150:
+        parser.error('--timeout-seconds must be positive and at most 150')
+    if args.worker:
+        main()
+        return 0
+
+    def cancelled(signum, frame):
+        raise SystemExit(128 + signum)
+
+    previous = signal.signal(signal.SIGTERM, cancelled)
+    process = None
+    try:
+        # One POSIX session bounds every nested API, retry sleep and gh child.
+        process = subprocess.Popen([sys.executable, '-u', os.path.abspath(__file__), '--worker'],
+                                   start_new_session=True)
+        return process.wait(timeout=args.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        print('::error::Sweep deadline exceeded; incomplete work deferred to the next tick',
+              file=sys.stderr)
+        return 124
+    finally:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        signal.signal(signal.SIGTERM, previous)
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(cli())

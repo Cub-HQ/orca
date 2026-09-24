@@ -63,3 +63,6 @@ Source-control and review changes must consider GitLab and other supported git p
 ## GitHub CLI Usage
 
 Be mindful of the user's `gh` CLI API rate limit — batch requests where possible and avoid unnecessary calls. All code, commands, and scripts must be compatible with macOS, Linux, and Windows. Fast-runner recovery requires every pilot runner's status to be explicitly `online` or `offline`; any other or missing status fails closed before label changes.
+
+The `factory-stragglers` workflow coalesces superseded events in its dedicated cancellable group while the sweep job retains the non-cancelling `df-straggler-sweep` lock with `queue: max`.
+The scheduled sweep has a 150-second process-group deadline inside its three-minute job budget; timeout or cancellation kills nested transports and defers incomplete work to the next tick.

@@ -1,11 +1,110 @@
 """Board derivation contract; run with python -m unittest discover -s tools -p test_factory_sweep.py."""
 import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 import factory_sweep
 
 from factory_sweep import derive_stage, format_elapsed, running_for
+
+
+@unittest.skipUnless(os.name == 'posix', 'maintenance runs on macOS/Linux')
+class SweepDeadlineTest(unittest.TestCase):
+    def test_cli_deadline_kills_transport_and_descendant(self):
+        self.run_cli(hang='/issues?')
+
+    def test_cli_cancellation_kills_transport_and_descendant(self):
+        self.run_cli(hang='/issues?', budget=5, terminate=True)
+
+    def test_cli_deadline_covers_later_phases(self):
+        for route in ('/actions/runs?', '/fields', '/items?'):
+            with self.subTest(route=route):
+                self.run_cli(hang=route, budget=5)
+
+    def test_cli_normal_completion(self):
+        self.run_cli()
+
+    def run_cli(self, hang='', budget=1, terminate=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            gh.write_text('#!' + sys.executable + '\n' + '''
+import json, os, pathlib, subprocess, sys, time
+root = pathlib.Path(os.environ['FAKE_ROOT'])
+args = ' '.join(sys.argv[1:])
+with (root / 'calls').open('a') as log:
+    log.write(args + '\\n')
+if os.environ['FAKE_HANG'] and os.environ['FAKE_HANG'] in args:
+    child = subprocess.Popen([sys.executable, '-c',
+        "import pathlib,time; time.sleep(" + os.environ['FAKE_DELAY'] + "); pathlib.Path(" + repr(str(root / 'late-write')) + ").touch(); time.sleep(30)"])
+    (root / 'pids').write_text(str(os.getpid()) + ' ' + str(child.pid))
+    time.sleep(30)
+if '/fields' in args:
+    value = [{'name': 'Running For', 'id': 1}]
+elif '/actions/' in args:
+    value = {'workflow_runs': []}
+else:
+    value = []
+if '--slurp' in sys.argv:
+    value = [value]
+if '--include' in sys.argv:
+    print('HTTP/2.0 200 OK\\n')
+print(json.dumps(value))
+''')
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(PATH=directory + os.pathsep + env['PATH'],
+                       FAKE_ROOT=directory, FAKE_HANG=hang, FAKE_DELAY=str(budget + 1), BOARD_TOKEN='fake',
+                       GITHUB_REPOSITORY='owner/repo')
+            started = time.monotonic()
+            process = subprocess.Popen([sys.executable, str(Path(factory_sweep.__file__)),
+                                        '--timeout-seconds', str(budget) if hang else '10'],
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+            try:
+                if terminate:
+                    until = time.monotonic() + 4
+                    while not (root / 'pids').exists() and time.monotonic() < until:
+                        time.sleep(0.02)
+                    self.assertTrue((root / 'pids').exists(), 'transport did not start')
+                    process.terminate()
+                try:
+                    stdout, stderr = process.communicate(timeout=budget + 5)
+                except subprocess.TimeoutExpired:
+                    self.fail('sweep exceeded its wall-clock budget')
+                self.assertLess(time.monotonic() - started, budget + 5)
+                self.assertEqual(process.returncode, 143 if terminate else 124 if hang else 0, stderr)
+                if hang:
+                    if not terminate:
+                        self.assertIn('deadline', stderr)
+                    self.assertNotIn('sweep done', stdout)
+                    pids = [int(pid) for pid in (root / 'pids').read_text().split()]
+                    # A killed orphan can briefly remain a zombie on Linux.
+                    for pid in pids:
+                        state = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
+                                               capture_output=True, text=True).stdout.strip()
+                        self.assertTrue(not state or state.startswith('Z'), (pid, state))
+                    calls = (root / 'calls').read_text()
+                    time.sleep(budget + 1)
+                    self.assertFalse((root / 'late-write').exists())
+                    self.assertEqual((root / 'calls').read_text(), calls)
+                else:
+                    self.assertIn('sweep done', stdout)
+            finally:
+                for pid in ([process.pid] + ([int(pid) for pid in (root / 'pids').read_text().split()]
+                                             if (root / 'pids').exists() else [])):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.communicate()
 
 
 class DeriveStageTest(unittest.TestCase):

@@ -19,10 +19,14 @@ permissions:
   issues: write
   actions: write
 concurrency:
-  group: df-straggler-sweep
-  cancel-in-progress: false
+  group: factory-stragglers
+  cancel-in-progress: true
 jobs:
   sweep:
+    concurrency:
+      group: df-straggler-sweep
+      cancel-in-progress: false
+      queue: max
     runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 10
     steps:
