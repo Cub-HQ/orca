@@ -37,11 +37,12 @@ class StandingRulingsTests(unittest.TestCase):
                     return authority if '/agent/AGENTS.md?' in endpoint else decisions
                 return json.dumps({'title': 'Issue', 'body': 'Complete mandatory issue body'})
 
-            with patch.dict(os.environ, HOME=directory, RUNNER_TEMP=directory, R='Cub-HQ/orca', ISSUE='7'), \
+            with patch.dict(os.environ, HOME=directory, RUNNER_TEMP=directory, GITHUB_OUTPUT=str(root / 'output'), GITHUB_RUN_ATTEMPT='1', R='Cub-HQ/orca', ISSUE='7'), \
                  patch('subprocess.check_output', side_effect=fetch), \
                  patch('urllib.request.urlopen', return_value=io.StringIO(json.dumps(
                      {'results': [{'text': 'Complete short lesson.'}, {'text': '記憶🛡️' * 30000}]}))):
                 exec(compile(SOURCE, str(WORKFLOW), 'exec'), {})
+            self.assertEqual((root / 'output').read_text(), 'artifact=standing-rulings-1\n')
             return (root / 'standing-rulings/rulings.md').read_text(encoding='utf-8')
 
     def test_unbounded_authority_and_utf8_history_budget(self):

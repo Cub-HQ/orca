@@ -45,6 +45,7 @@ jobs:
     runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 10
     outputs:
+      rulings_artifact: "${{ steps.rulings.outputs.artifact }}"
       stats: "${{ steps.gi.outputs.stats }}"
       go: "${{ steps.v.outputs.go || steps.resume.outputs.go }}"
     steps:
@@ -183,11 +184,13 @@ jobs:
         output = pathlib.Path(os.environ["RUNNER_TEMP"]) / "standing-rulings/rulings.md"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+            out.write("artifact=standing-rulings-" + os.environ["GITHUB_RUN_ATTEMPT"] + "\n")
         PY
     - name: Upload standing rulings
       uses: actions/upload-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ steps.rulings.outputs.artifact }}
         path: ${{ runner.temp }}/standing-rulings/rulings.md
         if-no-files-found: error
     - name: Enough to build?
@@ -364,7 +367,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Builder from scratch
       env:
@@ -547,7 +550,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Prepare bound review
       id: prepare
@@ -759,7 +762,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Fix blocking findings
       env:
@@ -914,7 +917,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Prepare bound review
       id: prepare
@@ -1129,7 +1132,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Adversarial QA
       env:
@@ -1293,7 +1296,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Combine with what merged first
       if: steps.resume.outputs.skip != 'true' && (steps.chk.outputs.mode == 'conflict')
@@ -1864,7 +1867,7 @@ jobs:
     - name: Download standing rulings
       uses: actions/download-artifact@v4
       with:
-        name: standing-rulings-${{ github.run_attempt }}
+        name: ${{ needs.intake.outputs.rulings_artifact }}
         path: ${{ runner.temp }}/standing-rulings
     - name: Classify only the unresolved stop
       id: classify
