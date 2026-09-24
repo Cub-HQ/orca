@@ -20,7 +20,6 @@ class StandingRulingsTests(unittest.TestCase):
     def produce(self, authority, decisions='', failure=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            output = root / 'output'
             config = root / '.config/hindsight-client/config.json'
             config.parent.mkdir(parents=True)
             key = root / 'key'
@@ -38,12 +37,12 @@ class StandingRulingsTests(unittest.TestCase):
                     return authority if '/agent/AGENTS.md?' in endpoint else decisions
                 return json.dumps({'title': 'Issue', 'body': 'Complete mandatory issue body'})
 
-            with patch.dict(os.environ, HOME=directory, GITHUB_OUTPUT=str(output), R='Cub-HQ/orca', ISSUE='7'), \
+            with patch.dict(os.environ, HOME=directory, RUNNER_TEMP=directory, R='Cub-HQ/orca', ISSUE='7'), \
                  patch('subprocess.check_output', side_effect=fetch), \
                  patch('urllib.request.urlopen', return_value=io.StringIO(json.dumps(
-                     {'results': [{'text': '記憶🛡️' * 30000}]}))):
+                     {'results': [{'text': 'Complete short lesson.'}, {'text': '記憶🛡️' * 30000}]}))):
                 exec(compile(SOURCE, str(WORKFLOW), 'exec'), {})
-            return output.read_text().split('\n', 1)[1].rsplit('\nrulings_', 1)[0][:-1]
+            return (root / 'standing-rulings/rulings.md').read_text(encoding='utf-8')
 
     def test_unbounded_authority_and_utf8_history_budget(self):
         authorities = ["## Josh’s laws — mandatory\n1. " + '守則🛡️ ' * 20000 + '\n\n',
@@ -61,6 +60,8 @@ class StandingRulingsTests(unittest.TestCase):
                 self.assertIn('Newest complete decision.', text)
                 self.assertNotIn('2020-01-01', text)
                 self.assertIn('Relevant past lessons', text)
+                self.assertIn('Complete short lesson.', text)
+                self.assertNotIn('記憶', text)
                 self.assertLessEqual(len(text.encode()) - len(header.encode()), 65536)
                 self.assertNotIn('\ufffd', text)
 

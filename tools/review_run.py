@@ -232,7 +232,7 @@ def prepare(args, state):
                   verdict=token(exact['body'], 'DF_REVIEW') if reuse else '',
                   brief=str(state / 'brief.txt'), issue_fingerprint=fingerprint(issue) if issue else '',
                   receipt=exact['id'] if reuse else None, diff_bytes=diff_bytes, budget_failures=timeouts,
-                  standing_rulings=os.environ.get('STANDING_RULINGS', ''))
+                  standing_rulings=Path(os.environ['STANDING_RULINGS_FILE']).read_text(encoding='utf-8'))
     save(state / 'state.json', result)
     emit({k: result[k] for k in ('reuse', 'verdict', 'head_sha', 'brief', 'diff_base')})
 
