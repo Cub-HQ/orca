@@ -15,6 +15,9 @@ from pathlib import Path
 p = Path(os.environ['FAKE_DATA'])
 d = json.loads(p.read_text())
 args = sys.argv[1:]; route = args[1]; method = args[args.index('-X')+1]
+if d.get('check_auth'):
+    expected = 'checks-read-only' if '/commits/' in route else 'sensitive-must-not-reach-reviewer'
+    assert os.environ.get('GH_TOKEN') == expected, route
 if d.get('quota'):
     print('API rate limit exceeded', file=sys.stderr); sys.exit(1)
 if d.get('checks_fail') and '/commits/' in route:
@@ -35,7 +38,7 @@ print(json.dumps([value] if '--slurp' in args else value))
 OMP = '''#!/usr/bin/env python3
 import json, os, re, sys
 from pathlib import Path
-assert not any(k in os.environ for k in ('GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'BOARD_TOKEN', 'APP_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_ASKPASS'))
+assert not any(k in os.environ for k in ('GH_TOKEN', 'GITHUB_TOKEN', 'CHECKS_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'BOARD_TOKEN', 'APP_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_ASKPASS'))
 if (Path.cwd() / 'sleep-review').exists(): __import__('time').sleep(10)
 brief = Path(sys.argv[-1][1:]).read_text()
 path = re.search(r'Write your independently produced verdict to (.+) \\(not a GitHub comment\\)', brief)[1]
@@ -149,6 +152,13 @@ class ReviewCLI(unittest.TestCase):
         self.set_data(comments=[self.receipt('block')], checks_fail=True)
         self.prepare()
         self.assertEqual(json.loads((self.state / 'result.json').read_text())['verdict'], 'block')
+
+    def test_checks_token_only_used_for_evidence_reads(self):
+        self.env['CHECKS_TOKEN'] = 'checks-read-only'
+        self.set_data(check_auth=True)
+        self.prepare()
+        self.cli('run', '--tier', 'A', '--model', 'oauth-pool/test', '--effort', 'low', '--minutes', '1')
+        self.assertEqual(json.loads((self.state / 'result.json').read_text())['verdict'], 'approve')
 
     def test_parser_without_optional_feedback_feature(self):
         parser = self.runner.with_name('factory_receipts.py')

@@ -487,6 +487,7 @@ jobs:
       id: prepare
       if: steps.resume.outputs.skip != 'true'
       env:
+        CHECKS_TOKEN: "${{ github.token }}"
         STANDING_RULINGS: "${{ needs.intake.outputs.rulings }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
@@ -806,6 +807,7 @@ jobs:
       id: prepare
       if: steps.resume.outputs.skip != 'true'
       env:
+        CHECKS_TOKEN: "${{ github.token }}"
         STANDING_RULINGS: "${{ needs.intake.outputs.rulings }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
@@ -1719,5 +1721,7 @@ permissions:
   issues: write
   pull-requests: write
   actions: write
+  checks: read
+  statuses: read
 env:
   GH_TOKEN: "${{ secrets.FACTORY_TOKEN || github.token }}"

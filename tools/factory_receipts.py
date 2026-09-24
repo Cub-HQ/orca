@@ -41,14 +41,14 @@ def producer_proof(body):
     return proof
 
 
-def api(path, method='GET', data=None, pages=False, timeout=None):
+def api(path, method='GET', data=None, pages=False, timeout=None, env=None):
     cmd = ['gh', 'api', path, '-X', method]
     if pages:
         cmd += ['--paginate', '--slurp']
     if data is not None:
         cmd += ['--input', '-']
     result = subprocess.run(cmd, input=json.dumps(data) if data is not None else None,
-                            text=True, capture_output=True, check=True, timeout=timeout)
+                            text=True, capture_output=True, check=True, timeout=timeout, env=env)
     value = json.loads(result.stdout) if result.stdout.strip() else None
     return [item for page in value for item in page] if pages else value
 

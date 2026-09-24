@@ -84,8 +84,9 @@ def prepare(args, state):
         for line in previous['body'].splitlines():
             if 'FINDING_ID=' in line and not re.search(r'\bRESOLVED\b', line):
                 findings.append(line)
-    checks = api(f'{root}/commits/{head}/check-runs?per_page=100')
-    statuses = api(f'{root}/commits/{head}/status')
+    checks_env = dict(os.environ, GH_TOKEN=os.environ['CHECKS_TOKEN']) if os.environ.get('CHECKS_TOKEN') else None
+    checks = api(f'{root}/commits/{head}/check-runs?per_page=100', env=checks_env)
+    statuses = api(f'{root}/commits/{head}/status', env=checks_env)
     evidence = []
     for c in source:
         body = c.get('body') or ''
