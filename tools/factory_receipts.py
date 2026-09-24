@@ -10,6 +10,7 @@ Outputs are printed and appended to GITHUB_OUTPUT. API errors fail closed.
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -40,14 +41,19 @@ def producer_proof(body):
     return proof
 
 
-def api(path, method='GET', data=None, pages=False):
+def api(path, method='GET', data=None, pages=False, timeout=None, env=None):
+    # Job-token reads avoid the shared App quota; writes retain the App identity.
+    repo = os.environ.get('GITHUB_REPOSITORY', '')
+    if (env is None and method == 'GET' and os.environ.get('READ_TOKEN')
+            and repo and path.startswith(f'repos/{repo}/')):
+        env = dict(os.environ, GH_TOKEN=os.environ['READ_TOKEN'])
     cmd = ['gh', 'api', path, '-X', method]
     if pages:
         cmd += ['--paginate', '--slurp']
     if data is not None:
         cmd += ['--input', '-']
     result = subprocess.run(cmd, input=json.dumps(data) if data is not None else None,
-                            text=True, capture_output=True, check=True)
+                            text=True, capture_output=True, check=True, timeout=timeout, env=env)
     value = json.loads(result.stdout) if result.stdout.strip() else None
     return [item for page in value for item in page] if pages else value
 
@@ -230,7 +236,19 @@ class Factory:
                     continue
             if stage == 'intake' and value == 'go' and token(body, 'FAST_LANE') == 'orch-direct':
                 value = 'orch-direct'
-            return {'value': value, 'evidence': c['id'], **({'producer_proof': proof} if proof else {})}
+            result = {'value': value, 'evidence': c['id'], **({'producer_proof': proof} if proof else {})}
+            if stage in ('review1', 'review2'):
+                tier, model = token(body, 'TIER'), token(body, 'MODEL')
+                try:
+                    seconds = float(token(body, 'REVIEW_SECONDS'))
+                    budget = float(token(body, 'BUDGET_SECONDS'))
+                except ValueError:
+                    pass  # Legacy evidence remains valid without optional metrics.
+                else:
+                    if tier and model and all(math.isfinite(n) and n >= 0 for n in (seconds, budget)):
+                        result['review_metrics'] = dict(tier=tier, model=model,
+                                                        review_seconds=seconds, budget_seconds=budget)
+            return result
         return None
 
     def result(self, stage, row, pull):

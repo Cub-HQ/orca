@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Select review tier from local base..head changes; emit JSON and GITHUB_OUTPUT.
+
+One lexical boundary list below owns escalation. Comments and documentation never
+escalate; workflow names alone are not boundaries. This is a review budget router,
+not a security proof. Unknown boundary vocabulary belongs in this producer.
+"""
+import argparse
+import difflib
+import json
+import os
+from pathlib import PurePosixPath
+import re
+import subprocess
+
+
+# Single explicit list, applied to changed code and meaningful path components.
+BOUNDARIES = re.compile('|'.join((
+    r'(?<![a-z0-9])(?:secrets?|credentials?|passwords?|tokens?|api[_-]?keys?|private[_-]?keys?)(?![a-z0-9])',
+    r'(?<![a-z0-9])(?:authz|authorize|authorization|authenticate|authentication|oauth|bearer|permissions?|allowlist|denylist|access[_-]?control)(?![a-z0-9])',
+    r'(?<![a-z0-9])(?:payments?|billing|charges?|refunds?|transfers?|balance|money|stripe)(?![a-z0-9])',
+    r'(?<![a-z0-9])(?:deploy(?:ment)?|release|merge)[_-]?(?:gate|guard|approval|policy|check)(?![a-z0-9])',
+    r'\b(?:gh\s+pr\s+merge|git\s+push|railway\s+(?:up|deploy)|npm\s+publish)\b',
+    r'\b(?:required[_-]?(?:reviews?|approvals?|checks?)|branch[_-]?protection)\b|\benvironment\s*:',
+    r'^\s*(?:deploy|release|merge)\s*:',
+)), re.IGNORECASE)
+DOC_SUFFIXES = {'.md', '.mdx', '.rst', '.txt', '.adoc'}
+
+
+def git(*args):
+    return subprocess.check_output(['git', *args], text=True, encoding='utf-8', errors='replace')
+
+
+def code_lines(text, path):
+    """Remove comments outside quoted strings, retaining block-comment context."""
+    suffix = PurePosixPath(path).suffix.lower()
+    hash_comments = suffix in {'.py', '.sh', '.bash', '.zsh', '.yml', '.yaml', '.toml', '.rb'} or not suffix
+    slash_comments = suffix in {'.js', '.jsx', '.ts', '.tsx', '.c', '.h', '.cpp', '.rs', '.go', '.java', '.css', '.scss'}
+    strings = r'\"\"\"[\s\S]*?\"\"\"|\x27\x27\x27[\s\S]*?\x27\x27\x27|"(?:\\.|[^"\\])*"|\x27(?:\\.|[^\x27\\])*\x27|`(?:\\.|[^`\\])*`'
+    comments = (r'|#[^\n]*' if hash_comments else '') + (r'|//[^\n]*|/\*[\s\S]*?\*/' if slash_comments else '')
+    def strip(match):
+        value = match.group()
+        return '\n' * value.count('\n') if value.startswith(('#', '//', '/*')) else value
+    stripped = re.sub(strings + comments, strip, text)
+    result = []
+    for line in stripped.splitlines():
+        # Preserve strings and Python indentation; collapse only cosmetic spacing.
+        tokens = re.findall(strings + r'|\w+|[^\w\s]', line)
+        if tokens:
+            indent = line[:len(line) - len(line.lstrip())] if suffix in {'.py', '.yml', '.yaml'} else ''
+            result.append(indent + ' '.join(tokens))
+    return result
+
+
+def classify(base, head, repo):
+    revision = base + '..' + head
+    paths = git('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', revision, '--').split('\0')
+    tier = 'a'
+    for path in filter(None, paths):
+        if PurePosixPath(path).suffix.lower() in DOC_SUFFIXES:
+            continue
+        patch = git('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=0', revision, '--', path)
+        # Read full blobs to recognize comments whose opening delimiter is outside
+        # the zero-context hunk. The diff headers identify added/deleted files.
+        before = '' if 'new file mode ' in patch else git('show', base + ':' + path)
+        after = '' if 'deleted file mode ' in patch else git('show', head + ':' + path)
+        old, new = code_lines(before, path), code_lines(after, path)
+        changed = []
+        boundary_guard = False
+        for tag, i, j, k, l in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+            if tag != 'equal':
+                changed.extend(old[i:j] + new[k:l])
+                if PurePosixPath(path).suffix.lower() in {'.yaml', '.yml'}:
+                    for lines, start, end in ((old, i, j), (new, k, l)):
+                        for index in range(start, end):
+                            is_guard = bool(re.match(r'\s*if\s*:', lines[index]))
+                            indent = len(lines[index]) - len(lines[index].lstrip())
+                            for ancestor in reversed(lines[:index]):
+                                level = len(ancestor) - len(ancestor.lstrip())
+                                if level < indent:
+                                    if is_guard or ancestor.strip() == 'permissions :':
+                                        boundary_guard |= bool(BOUNDARIES.search(ancestor))
+                                    indent = level
+        if not changed:
+            # File mode changes are executable behavior, unlike comments/spacing.
+            if re.search(r'^(?:old|new) mode ', patch, re.MULTILINE):
+                tier = max(tier, 'b')
+            continue
+        tier = max(tier, 'b')
+        # Token spacing is restored for matching compound identifiers/commands.
+        changed_code = re.sub(r'([a-z])([A-Z])', r'\1_\2', '\n'.join(changed))
+        decision = re.search(r'\b(?:if|return|allow(?:ed)?|deny|require(?:d)?)\b', changed_code)
+        if BOUNDARIES.search(changed_code) or boundary_guard or (decision and BOUNDARIES.search(path)):
+            tier = 'c'
+    omp = repo.rsplit('/', 1)[-1].lower() == 'omp-config-backup'
+    minutes = 5 if omp else {'a': 4, 'b': 5, 'c': 15}[tier]
+    return {'tier': tier,
+            'model': 'oauth-pool/claude-opus-5' if tier == 'c' and not omp else 'oauth-pool/grok-4.6',
+            'effort': {'a': 'low', 'b': 'medium', 'c': 'high'}[tier],
+            'minutes': minutes, 'timeout_minutes': minutes + 1}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--base', required=True)
+    parser.add_argument('--head', default='HEAD')
+    parser.add_argument('--repo', required=True)
+    args = parser.parse_args()
+    if not re.fullmatch(r'[\w.-]+/[\w.-]+', args.repo):
+        parser.error('--repo must be owner/name')
+    # Resolve before constructing ranges: no options or arbitrary diff arguments.
+    base = git('rev-parse', '--verify', '--end-of-options', args.base + '^{commit}').strip()
+    head = git('rev-parse', '--verify', '--end-of-options', args.head + '^{commit}').strip()
+    result = classify(base, head, args.repo)
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            output.write(''.join(f'{key}={value}\n' for key, value in result.items()))
+    print(json.dumps(result, sort_keys=True))
+
+
+if __name__ == '__main__':
+    main()

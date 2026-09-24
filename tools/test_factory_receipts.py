@@ -3,6 +3,38 @@ import unittest
 from factory_receipts import Factory, fingerprint
 
 
+class ReadTokenBoundaryTest(unittest.TestCase):
+    def test_exhausted_app_reads_do_not_change_write_identity(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from factory_receipts import api
+
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory) / 'gh'
+            gh.write_text('#!/usr/bin/env python3\n'
+                          'import json, os, sys\n'
+                          'method = sys.argv[sys.argv.index("-X") + 1]\n'
+                          'credential = os.environ.get("GH_TOKEN")\n'
+                          'if method == "GET" and sys.argv[2].startswith("repos/o/r/") and credential == "app": sys.exit(1)\n'
+                          'print(json.dumps({"credential": credential}))\n')
+            gh.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': directory + os.pathsep + os.environ['PATH'],
+                                         'GH_TOKEN': 'app', 'READ_TOKEN': 'job',
+                                         'GITHUB_REPOSITORY': 'o/r'}):
+                self.assertEqual(api('repos/o/r/issues/1')['credential'], 'job')
+                for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+                    self.assertEqual(api('repos/o/r/issues/1', method, {})['credential'], 'app')
+                for path in ('repos/o/other/issues/1', 'repos/o/r-other/issues/1'):
+                    self.assertEqual(api(path)['credential'], 'app')
+                self.assertEqual(api('repos/o/r/issues/1', env=dict(os.environ, GH_TOKEN='explicit'))['credential'], 'explicit')
+                with patch.dict(os.environ, {'READ_TOKEN': ''}):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        api('repos/o/r/issues/1')
+
+
 class ProducerReceiptGateTest(unittest.TestCase):
     def setUp(self):
         self.issue = {'state': 'open', 'title': 'Repair generator', 'body': '', 'labels': [{'name': 'bug'}]}
