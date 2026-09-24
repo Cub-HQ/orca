@@ -1,19 +1,103 @@
 #!/usr/bin/env python3
 """Neutral candidate-checkout gate. Run with the selected project's interpreter.
 
-No checkout, install, publish, or exception-to-success conversion occurs here.
+No checkout, publish, or exception-to-success conversion occurs here.
 --discover is the single unittest discovery runner; --self-test is isolated proof.
 """
 import argparse
+from contextlib import contextmanager
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import platform
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+from urllib.request import urlopen
+
+
+ACTIONLINT_VERSION = '1.7.12'
+# Official v1.7.12 checksums.txt, also matched against GitHub release asset digests.
+ACTIONLINT_SHA256 = {
+    'darwin_arm64': 'aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f',
+    'darwin_amd64': '5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644',
+    'linux_amd64': '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8',
+    'linux_arm64': '325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6',
+}
+
+
+@contextmanager
+def pinned_actionlint():
+    installed = shutil.which('actionlint')
+    if installed:
+        version = subprocess.run([installed, '-version'], capture_output=True, text=True)
+        if version.returncode == 0 and version.stdout.splitlines()[:1] == [ACTIONLINT_VERSION]:
+            yield installed
+            return
+    machine = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(platform.machine(), platform.machine())
+    target = platform.system().lower() + '_' + machine
+    digest = ACTIONLINT_SHA256[target]
+    name = f'actionlint_{ACTIONLINT_VERSION}_{target}.tar.gz'
+    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'factory-merge-gate'
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / name
+    if archive.exists():
+        data = archive.read_bytes()
+    else:
+        url = f'https://github.com/rhysd/actionlint/releases/download/v{ACTIONLINT_VERSION}/{name}'
+        with urlopen(url, timeout=60) as response:
+            data = response.read()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError('actionlint archive checksum mismatch: ' + str(archive))
+    if not archive.exists():
+        with tempfile.NamedTemporaryFile(dir=cache, delete=False) as download:
+            temporary = Path(download.name)
+            try:
+                download.write(data)
+                download.close()
+                temporary.replace(archive)
+            finally:
+                temporary.unlink(missing_ok=True)
+    # Re-extract only the verified regular binary; never execute an unchecked cache file.
+    with tempfile.TemporaryDirectory(prefix='factory-actionlint-') as tmp:
+        binary = Path(tmp) / 'actionlint'
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tar:
+            member = tar.getmember('actionlint')
+            if not member.isfile():
+                raise ValueError('actionlint archive binary must be a regular file')
+            with tar.extractfile(member) as source:
+                binary.write_bytes(source.read())
+        binary.chmod(0o700)
+        print(f'ACTIONLINT_VERSION={ACTIONLINT_VERSION} SHA256={digest} ARCHIVE={archive}', flush=True)
+        yield str(binary)
+
+
+def validate_workflows(paths):
+    paths = list(paths)
+    if not paths:
+        return
+    for path in paths:
+        workflow = validate_workflow_yaml(path)
+        # v1.7.12 predates GitHub's queue key. Validate its literal contract here;
+        # never suppress expression-context diagnostics or accept unchecked expressions.
+        for owner in [workflow, *workflow.get('jobs', {}).values()]:
+            concurrency = owner.get('concurrency')
+            if isinstance(concurrency, dict) and 'queue' in concurrency:
+                if concurrency['queue'] not in ('single', 'max'):
+                    raise ValueError(f'unsupported concurrency.queue in {path}: expected single or max')
+    with pinned_actionlint() as binary, tempfile.TemporaryDirectory(prefix='factory-actionlint-config-') as tmp:
+        config = Path(tmp) / 'actionlint.yaml'
+        config.write_text('self-hosted-runner:\n  labels: [m4, hetzner, fast, heavy, blacksmith-6vcpu-macos-15]\n')
+        command([binary, '-shellcheck=', '-pyflakes=', '-config-file', str(config),
+                 '-ignore', '^unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"$',
+                 '-ignore', '^anchor "[^\"]+" is defined but not used$',
+                 *map(str, paths)])
 
 
 def command(argv):
@@ -164,9 +248,8 @@ def main():
         raise ValueError('checkout HEAD must equal the full candidate SHA')
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.base_sha, actual], check=True)
     repo = args.repo.removeprefix('Cub-HQ/')
-    if repo == 'orca':
-        for workflow in sorted(Path('.github/workflows').glob('*.y*ml')):
-            validate_workflow_yaml(workflow)
+    validate_workflows(sorted(path for path in Path(".github/workflows").iterdir()
+                              if path.suffix in (".yml", ".yaml") and path.is_file()))
     if repo == 'fitness-coach':
         os.chdir('runtime')
         sys.path.insert(0, str(Path.cwd()))

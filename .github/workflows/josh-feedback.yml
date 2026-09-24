@@ -15,7 +15,7 @@ jobs:
       == ''Cubatica'' && (contains(github.event.issue.labels.*.name, ''actions:needs-info'')
       || contains(github.event.issue.labels.*.name, ''factory:needs-you'')) && startsWith(github.event.comment.body,
       ''Answer: '')'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 5
     steps:
     - name: Dispatch the answered question once

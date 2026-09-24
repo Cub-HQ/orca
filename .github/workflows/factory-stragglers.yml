@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sweep:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4

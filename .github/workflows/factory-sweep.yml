@@ -4,13 +4,13 @@ permissions:
   contents: read
   issues: write
   actions: write
-concurrency:
-  group: factory-sweep
-  cancel-in-progress: false
 jobs:
   sweep:
     name: Self-heal stale issues
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hetzner, fast]
+    concurrency:
+      group: factory-sweep
+      cancel-in-progress: false
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
@@ -24,6 +24,37 @@ jobs:
       run: 'python3 tools/factory_runner_watch.py --repo "$GITHUB_REPOSITORY"
 
 '
+  recover-fast:
+    name: Recover offline fast runner
+    # FC alone owns shared org labels; copies in sibling repositories must skip.
+    if: github.repository == 'Cub-HQ/fitness-coach' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, m4]
+    concurrency:
+      group: org-fast-runner-recovery
+      cancel-in-progress: false
+    timeout-minutes: 5
+    steps:
+    - name: Mint factory GitHub App token
+      id: factory-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ secrets.FACTORY_APP_ID }}
+        private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+        owner: Cub-HQ
+    - name: Export factory repository token
+      env:
+        FACTORY_APP_TOKEN: ${{ steps.factory-token.outputs.token }}
+      run: |
+        if [ "$RUNNER_OS" = macOS ]; then
+          echo /opt/homebrew/bin >> "$GITHUB_PATH"
+        fi
+        echo "GH_TOKEN=$FACTORY_APP_TOKEN" >> "$GITHUB_ENV"
+    - uses: actions/checkout@v4
+      with:
+        ref: main
+        persist-credentials: false
+    - name: Reconcile reserved fast capacity
+      run: python3 tools/factory_runner_watch.py --repo "$GITHUB_REPOSITORY" --recover-fast
 'on':
   schedule:
   - cron: "*/5 * * * *"

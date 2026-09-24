@@ -11,7 +11,7 @@ jobs:
   admission:
     name: Admission
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'actions:go'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 5
     outputs:
       go: "${{ steps.claim.outputs.go }}"
@@ -42,7 +42,7 @@ jobs:
     name: Intake
     needs: admission
     if: needs.admission.outputs.go == 'true'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 10
     outputs:
       rulings: "${{ steps.rulings.outputs.text }}"
@@ -271,7 +271,7 @@ jobs:
     - admission
     - intake
     if: needs.admission.outputs.go == 'true' && (needs.intake.outputs.go == 'go')
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 45
     outputs:
       stats: "${{ steps.gi.outputs.stats }}"
@@ -416,7 +416,7 @@ jobs:
     - intake
     - build
     if: needs.admission.outputs.go == 'true'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 45
     outputs:
       stats: "${{ steps.gi.outputs.stats }}"
@@ -617,7 +617,7 @@ jobs:
     - review1
     if: needs.admission.outputs.go == 'true' && (needs.review1.outputs.verdict ==
       'block')
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 45
     outputs:
       stats: "${{ steps.gi.outputs.stats }}"
@@ -765,7 +765,7 @@ jobs:
     - build
     - rework
     if: needs.admission.outputs.go == 'true'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 45
     outputs:
       stats: "${{ steps.gi.outputs.stats }}"
@@ -1123,7 +1123,7 @@ jobs:
     - qa
     if: needs.admission.outputs.go == 'true' && (always() && needs.qa.outputs.qa ==
       'pass')
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 30
     outputs:
       stats: "${{ steps.gi.outputs.stats }}"
@@ -1282,7 +1282,7 @@ jobs:
     - merge_gate
     if: needs.admission.outputs.go == 'true' && (always() && needs.qa.outputs.qa ==
       'pass' && needs.rebase.result == 'success') && needs.merge_gate.result == 'success'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 10
     steps:
     - name: Load receipt and lease guard
@@ -1393,7 +1393,7 @@ jobs:
     - merge_gate
     if: "!cancelled() && (needs.admission.outputs.go == 'true' && (always() && needs.intake.result
       != 'skipped' && needs.intake.outputs.go != 'orch-direct'))"
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 10
     steps:
     - name: Load receipt and lease guard
@@ -1619,7 +1619,7 @@ jobs:
     needs:
     - admission
     if: always() && cancelled() && needs.admission.outputs.go == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hetzner, heavy]
     steps:
     - name: Load receipt and lease guard
       env:
@@ -1651,7 +1651,7 @@ jobs:
     - rebase
     if: always() && needs.admission.outputs.go == 'true' && needs.qa.outputs.qa ==
       'pass' && needs.rebase.result == 'success'
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, heavy]
     timeout-minutes: 30
     outputs:
       head: "${{ steps.candidate.outputs.head }}"
@@ -1765,7 +1765,7 @@ jobs:
     if: "!cancelled() && (needs.admission.outputs.go == 'true' && (always() && needs.intake.result
       != 'skipped' && needs.intake.outputs.go != 'orch-direct')) && needs.ship.result
       != 'success'"
-    runs-on: [self-hosted, hetzner]
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 5
     outputs:
       verdict: "${{ steps.classify.outputs.verdict }}"

@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   requeue:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hetzner, fast]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
