@@ -4,6 +4,7 @@
 R, ISSUE, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT identify the caller.
 Commands: admission; guard [--stage ship] [--pr N]; resume STAGE;
 record STAGE [--value done]; revoke; selfcheck. All support --pr N.
+Producer fix must name an exact PR changed-file path (quote paths with spaces).
 Outputs are printed and appended to GITHUB_OUTPUT. API errors fail closed.
 """
 import argparse
@@ -92,6 +93,12 @@ class Factory:
     def comments(self, number):
         return self.api(self.root + '/issues/' + str(number) + '/comments?per_page=100', pages=True)
 
+    def producer_changed(self, proof, pull):
+        paths = {next(value for value in match if value) for match in re.findall(
+            r'''`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s`"'(),;:]+)''', proof['Producer fix'])}
+        files = self.api(self.root + '/pulls/' + str(pull['number']) + '/files?per_page=100', pages=True)
+        return any(file['filename'] in paths for file in files)
+
     def state(self):
         issue = self.api(self.root + '/issues/' + self.issue)
         if issue['state'] != 'open':
@@ -172,7 +179,8 @@ class Factory:
                 proof = row.get('producer_proof') or {}
                 if (not isinstance(proof, dict)
                         or not producer_proof('\n'.join(f'{k}: {v}' for k, v in proof.items()))
-                        or not pull or row.get('head_sha') != pull['head']['sha']):
+                        or not pull or row.get('head_sha') != pull['head']['sha']
+                        or not self.producer_changed(proof, pull)):
                     continue
             if stage != 'intake':
                 if not pull or str(row.get('pr')) != str(pull['number']):
@@ -218,7 +226,7 @@ class Factory:
             proof = {}
             if stage in ('build', 'rework') and bug_issue(issue):
                 proof = producer_proof(body)
-                if not proof:
+                if not proof or not self.producer_changed(proof, pull):
                     continue
             if stage == 'intake' and value == 'go' and token(body, 'FAST_LANE') == 'orch-direct':
                 value = 'orch-direct'
