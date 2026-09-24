@@ -85,6 +85,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -314,6 +315,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -465,6 +467,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -527,6 +530,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
       env:
+        READ_TOKEN: "${{ github.token }}"
         MODEL: "${{ steps.tier.outputs.model }}"
         EFFORT: "${{ steps.tier.outputs.effort }}"
         TIER: "${{ steps.tier.outputs.tier }}"
@@ -642,6 +646,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -795,6 +800,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -857,6 +863,7 @@ jobs:
       if: steps.resume.outputs.skip != 'true'
       timeout-minutes: ${{ fromJSON(steps.tier.outputs.timeout_minutes) }}
       env:
+        READ_TOKEN: "${{ github.token }}"
         MODEL: "${{ steps.tier.outputs.model }}"
         EFFORT: "${{ steps.tier.outputs.effort }}"
         TIER: "${{ steps.tier.outputs.tier }}"
@@ -975,6 +982,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -1128,6 +1136,7 @@ jobs:
       continue-on-error: true
       working-directory: board-stage
       env:
+        GH_TOKEN: "${{ github.token }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         R: "${{ github.repository }}"
       run: |
@@ -1290,7 +1299,7 @@ jobs:
       run: |
         python3 "$RECEIPTS" guard --stage ship
         export PATH="/opt/homebrew/bin:$PATH"
-        python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Deploying" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
+        GH_TOKEN="$READ_TOKEN" python3 tools/board_sync.py --repo "$R" --issue "$ISSUE" --stage "Deploying" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
       if: steps.resume.outputs.skip != 'true'
     - name: Stage label
       env:
@@ -1462,7 +1471,7 @@ jobs:
           triage "the pipeline did not finish (review1=$V1 review2=$V2 qa=$QA merge=$SHIP deploy=${DEP:-} acceptance=${ACC:-})"
         fi
         echo "DF_ROUTE=$ROUTE" >> "$GITHUB_ENV"
-        GH_TOKEN="$READ_TOKEN" gh api "repos/$R/contents/tools/board_sync.py" --jq .content | base64 -d > "$RUNNER_TEMP/board_sync.py" && python3 "$RUNNER_TEMP/board_sync.py" --repo "$R" --issue "$ISSUE" --stage "$STG" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID" || true
+        GH_TOKEN="$READ_TOKEN" gh api "repos/$R/contents/tools/board_sync.py" --jq .content | base64 -d > "$RUNNER_TEMP/board_sync.py" && GH_TOKEN="$READ_TOKEN" python3 "$RUNNER_TEMP/board_sync.py" --repo "$R" --issue "$ISSUE" --stage "$STG" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID" || true
     - name: For Josh
       if: always()
       env:
