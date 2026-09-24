@@ -83,28 +83,30 @@ class RecoveryCLI(unittest.TestCase):
         self.assertEqual(result.returncode == 0, success, result.stderr)
         return json.loads(self.file.read_text())
 
-    def assert_split(self, data, target=102):
+    def assert_split(self, data):
         self.assertEqual(len(data['runners']), 9)
         for runner in data['runners'][:8]:
             labels = {v['name'] for v in runner['labels']}
-            self.assertEqual('fast' in labels, runner['id'] == target)
-            self.assertEqual('heavy' in labels, runner['id'] != target)
+            self.assertEqual('fast' in labels, runner['id'] in (101, 103, 104, 105, 106))
+            self.assertEqual('heavy' in labels, runner['id'] != 101)
             self.assertTrue({'self-hosted', 'hetzner', 'Linux', 'X64', 'keep-me'} <= labels)
         self.assertEqual(data['runners'][-1], state()['runners'][-1])
 
-    def test_busy_failover_and_replay(self):
+    def test_old_split_converges_and_offline_dedicated_replays(self):
         after = self.run_cli(state())
         self.assert_split(after)
-        replay = self.run_cli(after)
-        self.assertEqual(replay, after)
+        self.assertEqual(after['calls'], [[i, 'POST', 'fast'] for i in (103, 104, 105, 106)])
+        self.assertEqual(self.run_cli(after), after)
         after['runners'][0]['status'] = 'online'
-        self.assertEqual(self.run_cli(after), after)  # recovered former fast stays heavy
+        self.assertEqual(self.run_cli(after), after)
 
-    def test_online_busy_fast_untouched(self):
+    def test_online_busy_targets_untouched(self):
         data = state()
         data['runners'][0]['status'] = 'online'
+        for runner in data['runners'][2:6]:
+            runner['labels'].append({'name': 'fast'})
+        self.assert_split(data)
         self.assertEqual(self.run_cli(data), data)
-        self.assertEqual((self.root / 'reads').read_text(), 'GET\n')
 
     def test_unknown_pilot_status_refuses_before_writes(self):
         for status in (None, 'unknown', 'missing'):
@@ -125,11 +127,15 @@ class RecoveryCLI(unittest.TestCase):
                     self.assertEqual((self.root / 'reads').read_text(), 'GET\n')
 
     def test_failures_readback_and_next_run(self):
-        for operation in ([102, 'POST', 'fast'], [101, 'POST', 'heavy'],
-                          [101, 'DELETE', 'fast'], [102, 'DELETE', 'heavy']):
+        for operation in ([103, 'POST', 'fast'], [102, 'POST', 'heavy'],
+                          [102, 'DELETE', 'fast'], [101, 'DELETE', 'heavy']):
             for applied in (False, True):
                 with self.subTest(operation=operation, applied=applied):
                     data = state()
+                    data['runners'][0]['labels'].append({'name': 'heavy'})
+                    data['runners'][1]['labels'] = [
+                        v for v in data['runners'][1]['labels'] if v['name'] != 'heavy']
+                    data['runners'][1]['labels'].append({'name': 'fast'})
                     data.update(fail=operation, apply_failure=applied)
                     after = self.run_cli(data, success=applied)
                     self.assertTrue(any(any(v['name'] == 'fast' for v in r['labels'])
@@ -141,15 +147,18 @@ class RecoveryCLI(unittest.TestCase):
         for runner in data['runners'][:8]:
             runner['labels'] = [v for v in runner['labels'] if v['name'] not in ('fast', 'heavy')]
             runner['status'] = 'online'
-        self.assert_split(self.run_cli(data), target=101)
+        self.assert_split(self.run_cli(data))
 
     def test_refusals_do_not_mutate(self):
-        for kind in ('offline', 'missing', 'wrong-label', 'wrong-repo', 'duplicate-name'):
+        for kind in ('offline', 'fast-targets-offline', 'missing', 'wrong-label', 'wrong-repo', 'duplicate-name'):
             with self.subTest(kind=kind):
                 data = state()
                 if kind == 'offline':
                     for r in data['runners'][:8]:
                         r['status'] = 'offline'
+                elif kind == 'fast-targets-offline':
+                    for index in (0, 2, 3, 4, 5):
+                        data['runners'][index]['status'] = 'offline'
                 elif kind == 'missing':
                     data['runners'].pop(2)
                 elif kind == 'wrong-label':
@@ -163,17 +172,20 @@ class RecoveryCLI(unittest.TestCase):
         data = state()
         data['fail_readback'] = True
         after = self.run_cli(data, success=False)
-        self.assertEqual(after['calls'], [[102, 'POST', 'fast']])
+        self.assertEqual(after['calls'], [[103, 'POST', 'fast']])
         after['runners'][0]['status'] = 'online'
-        self.assert_split(self.run_cli(after), target=101)
+        self.assert_split(self.run_cli(after))
 
-    def test_promoted_runner_goes_offline(self):
+    def test_all_fast_targets_drop_preserves_old_designation(self):
         data = state()
+        data['runners'][1]['labels'].append({'name': 'fast'})
         data['drop_target'] = True
         after = self.run_cli(data, success=False)
-        self.assertEqual(after['calls'], [[102, 'POST', 'fast']])
+        self.assertTrue(all(call[1] == 'POST' for call in after['calls']))
+        self.assertIn({'name': 'fast'}, after['runners'][1]['labels'])
         del after['drop_target']
-        self.assert_split(self.run_cli(after), target=103)
+        after['runners'][2]['status'] = 'online'
+        self.assert_split(self.run_cli(after))
 
 
 if __name__ == '__main__':

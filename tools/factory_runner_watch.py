@@ -304,15 +304,18 @@ def self_test():
 def recover_fast(repo, api=gh):
     """FC is the sole fleet writer; its recovery job serializes every invocation.
 
-    Promote/read back before demotion: interrupted writes may leave overlapping
-    labels, never deliberately remove the last fast designation. The next run
-    reconciles that overlap. GitHub does not provide an atomic label exchange.
+    Add/read back required labels before removing extras. Partial writes converge
+    on the next run; shared fast/heavy runners cover an offline dedicated runner.
+    GitHub does not provide an atomic label exchange.
     """
     if repo != "Cub-HQ/fitness-coach":
         raise RuntimeError("Only Cub-HQ/fitness-coach owns organization fast recovery")
     root = "orgs/Cub-HQ/actions/runners"
     # The approved eight-registration pilot excludes M4 and unrelated runners.
     fleet_names = {f"df-runner-{host}-{slot}" for host in range(1, 5) for slot in (1, 2)}
+    dedicated = "df-runner-1-1"
+    fast_names = {dedicated, "df-runner-2-1", "df-runner-2-2",
+                  "df-runner-3-1", "df-runner-3-2"}
 
     def inventory():
         fleet = [r for page in api(root + "?per_page=100", pages=True)
@@ -322,6 +325,7 @@ def recover_fast(repo, api=gh):
                 or {r["name"] for r in fleet} != fleet_names
                 or any(not {"self-hosted", "hetzner"} <= labels(r) for r in fleet)):
             raise RuntimeError("Pilot fleet inventory incomplete; refusing label changes")
+        # Validate the whole pilot before writes, including overlap reconciliation.
         if any(r.get("status") not in ("online", "offline") for r in fleet):
             raise RuntimeError("Pilot runner status unknown; refusing label changes")
         return runners
@@ -341,40 +345,35 @@ def recover_fast(repo, api=gh):
             raise RuntimeError(f"Runner {runner_id}: {label} change not confirmed") from failure
 
     runners = inventory()
-    fast = [r for r in runners.values() if "fast" in labels(r)]
-    online_fast = [r for r in fast if r["status"] == "online"]
-    if len(fast) == 1 and online_fast and all(
-            ("heavy" in labels(r)) == (r["id"] != fast[0]["id"])
-            for r in runners.values()):
-        print(f"Fast runner {fast[0]['id']}: healthy; no changes")
+
+    def available(current):
+        return any(r["name"] in fast_names and r["status"] == "online"
+                   for r in current.values())
+
+    if not available(runners):
+        raise RuntimeError("No online fast target; preserving current labels")
+    # Busy runners remain eligible: labels do not interrupt their current jobs.
+    desired = {i: ({"fast"} if r["name"] in fast_names else set())
+               | ({"heavy"} if r["name"] != dedicated else set())
+               for i, r in runners.items()}
+    if all(labels(r) & {"fast", "heavy"} == desired[i] for i, r in runners.items()):
+        print("Fleet healthy: five fast, seven heavy; no changes")
         return
-    # Busy is deliberately eligible: its current job continues, then fast work can
-    # start. Requiring idle would strand recovery when every heavy runner is busy.
-    candidates = online_fast or [r for r in runners.values()
-                                 if r["status"] == "online" and (not fast or "heavy" in labels(r))]
-    if not candidates:
-        raise RuntimeError("No online pilot runner; preserving current fast labels")
-    target = min(candidates, key=lambda r: r["name"])["id"]
-    if "fast" not in labels(runners[target]):
-        change(target, "fast", True)
-    fresh = inventory()
-    if fresh[target]["status"] != "online" or "fast" not in labels(fresh[target]):
-        raise RuntimeError("Promoted runner unavailable; preserving remaining fast labels")
-    if "heavy" in labels(fresh[target]):
-        change(target, "heavy", False)
-    for runner_id in sorted(set(runners) - {target}):
+    for runner_id in sorted(runners):
+        for label in sorted(desired[runner_id] - labels(runners[runner_id])):
+            change(runner_id, label, True)
+    for runner_id in sorted(runners):
         fresh = inventory()
-        if fresh[target]["status"] != "online" or "fast" not in labels(fresh[target]):
-            raise RuntimeError("Promoted runner unavailable; preserving remaining fast labels")
-        if "heavy" not in labels(fresh[runner_id]):
-            change(runner_id, "heavy", True)
-        if "fast" in labels(fresh[runner_id]):
-            change(runner_id, "fast", False)
+        if not any(r["name"] in fast_names and r["status"] == "online"
+                   and "fast" in labels(r) for r in fresh.values()):
+            raise RuntimeError("Fast targets unavailable; preserving remaining labels")
+        for label in sorted((labels(fresh[runner_id]) & {"fast", "heavy"}) - desired[runner_id]):
+            change(runner_id, label, False)
     final = inventory()
-    if any(("fast" in labels(r)) != (i == target)
-           or ("heavy" in labels(r)) != (i != target) for i, r in final.items()):
+    if not available(final) or any(
+            labels(r) & {"fast", "heavy"} != desired[i] for i, r in final.items()):
         raise RuntimeError("Fleet labels changed during recovery; next sweep must reconcile")
-    print(f"Fast runner {target}: one fast, seven heavy; registrations preserved")
+    print("Fleet healthy: five fast, seven heavy; registrations preserved")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
