@@ -66,3 +66,5 @@ Be mindful of the user's `gh` CLI API rate limit — batch requests where possib
 
 The `factory-stragglers` workflow coalesces superseded events in its dedicated cancellable group while the sweep job retains the non-cancelling `df-straggler-sweep` lock with `queue: max`.
 The scheduled sweep has a 150-second process-group deadline inside its three-minute job budget; timeout or cancellation kills nested transports and defers incomplete work to the next tick.
+
+Factory retry counts fetch all comment pages once and pass the combined list to standalone `jq`; `gh --jq` does not accept jq variable arguments such as `--arg`.
