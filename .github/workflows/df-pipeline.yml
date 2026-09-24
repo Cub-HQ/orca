@@ -432,15 +432,37 @@ jobs:
         R: "${{ github.repository }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
-      run: |
+      run: &load-trusted-review |
         set -euo pipefail
         export PATH="/opt/homebrew/bin:$PATH"
-        D=$(mktemp -d "$RUNNER_TEMP/factory-review-$GITHUB_RUN_ID.XXXXXX")
+        DEFAULT_BRANCH=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$R" --jq .default_branch)
+        BRANCH_REF=$(printf '%s' "$DEFAULT_BRANCH" | jq -sRr @uri)
+        REVIEW_TRUSTED_SHA=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$R/commits/$BRANCH_REF" --jq .sha)
+        [[ "$REVIEW_TRUSTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid trusted review commit' >&2; exit 1; }
+        if [ "${GITHUB_REF:-}" != "refs/heads/$DEFAULT_BRANCH" ] || [ "$GITHUB_SHA" != "$REVIEW_TRUSTED_SHA" ]; then
+          printf 'Workflow ref %s (%s) differs from trusted default branch %s (%s); using default-branch review machinery.\n' "${GITHUB_REF:-unknown}" "$GITHUB_SHA" "$DEFAULT_BRANCH" "$REVIEW_TRUSTED_SHA"
+        fi
+        ROOT=$(mktemp -d "$RUNNER_TEMP/factory-review-$GITHUB_RUN_ID.XXXXXX")
+        D="$ROOT/trusted"
+        mkdir "$D"
         for TOOL in factory_receipts.py review_run.py review_tier; do
-          GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/tools/$TOOL?ref=$GITHUB_SHA" > "$D/$TOOL"
+          GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/tools/$TOOL?ref=$REVIEW_TRUSTED_SHA" > "$D/$TOOL"
         done
-        GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/agent/agents/DF_Reviewer.md?ref=$GITHUB_SHA" > "$D/DF_Reviewer.md"
-        { echo "RECEIPTS=$D/factory_receipts.py"; echo "REVIEW_RUN=$D/review_run.py"; echo "REVIEW_TIER=$D/review_tier"; echo "REVIEW_STATE=$D/state"; } >> "$GITHUB_ENV"
+        GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/agent/agents/DF_Reviewer.md?ref=$REVIEW_TRUSTED_SHA" > "$D/DF_Reviewer.md"
+        REVIEW_MANIFEST="$D/SHA256SUMS"
+        (cd "$D" && shasum -a 256 factory_receipts.py review_run.py review_tier DF_Reviewer.md) > "$REVIEW_MANIFEST"
+        REVIEW_MANIFEST_SHA256=$(shasum -a 256 "$REVIEW_MANIFEST" | cut -d ' ' -f 1)
+        chmod a-w "$D" "$D/"*
+        {
+          echo "REVIEW_TRUSTED_SHA=$REVIEW_TRUSTED_SHA"
+          echo "REVIEW_MANIFEST=$REVIEW_MANIFEST"
+          echo "REVIEW_MANIFEST_SHA256=$REVIEW_MANIFEST_SHA256"
+          echo "RUNNER_VERSION=$REVIEW_TRUSTED_SHA:$REVIEW_MANIFEST_SHA256"
+          echo "RECEIPTS=$D/factory_receipts.py"
+          echo "REVIEW_RUN=$D/review_run.py"
+          echo "REVIEW_TIER=$D/review_tier"
+          echo "REVIEW_STATE=$ROOT/state"
+        } >> "$GITHUB_ENV"
     - name: Current issue, lease, and durable receipt
       id: resume
       env:
@@ -449,6 +471,9 @@ jobs:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
       run: |
+        set -euo pipefail
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$RECEIPTS" guard --stage review1
         python3 "$RECEIPTS" resume review1
     - name: Checkout board sync
@@ -512,6 +537,8 @@ jobs:
       run: |
         set -euo pipefail
         : "${STANDING_RULINGS:?Standing rulings missing; refusing to run without laws}"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" prepare --repo "$R" --pr "$PR" --issue "$ISSUE" --checkout "$W" --base "$BASE_SHA" --state "$REVIEW_STATE" --pipeline-stage review1
     - name: Classify selected review diff
       id: tier
@@ -523,6 +550,8 @@ jobs:
       run: |
         set -euo pipefail
         cd "$W"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_TIER" --base "$DIFF_BASE" --head "$REVIEW_HEAD" --repo "$R"
     - name: Independent review
       id: review
@@ -539,6 +568,8 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: Retry budget-exceeded review once
       if: steps.review.outputs.budget_retry == 'true'
@@ -553,6 +584,8 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         jq -e '.retryable == true and .reason == "budget-exceeded"' "$REVIEW_STATE/result.json"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: General Info
       id: gi
@@ -605,9 +638,11 @@ jobs:
         R: "${{ github.repository }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
-      run: 'python3 "$RECEIPTS" record review1
-
-'
+      run: |
+        set -euo pipefail
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
+        python3 "$RECEIPTS" record review1
   rework:
     name: Rework
     needs:
@@ -781,15 +816,7 @@ jobs:
         R: "${{ github.repository }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
-      run: |
-        set -euo pipefail
-        export PATH="/opt/homebrew/bin:$PATH"
-        D=$(mktemp -d "$RUNNER_TEMP/factory-review-$GITHUB_RUN_ID.XXXXXX")
-        for TOOL in factory_receipts.py review_run.py review_tier; do
-          GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/tools/$TOOL?ref=$GITHUB_SHA" > "$D/$TOOL"
-        done
-        GH_TOKEN="$READ_TOKEN" gh api -H "Accept: application/vnd.github.raw+json" "repos/$R/contents/agent/agents/DF_Reviewer.md?ref=$GITHUB_SHA" > "$D/DF_Reviewer.md"
-        { echo "RECEIPTS=$D/factory_receipts.py"; echo "REVIEW_RUN=$D/review_run.py"; echo "REVIEW_TIER=$D/review_tier"; echo "REVIEW_STATE=$D/state"; } >> "$GITHUB_ENV"
+      run: *load-trusted-review
     - name: Current issue, lease, and durable receipt
       id: resume
       env:
@@ -798,6 +825,9 @@ jobs:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
       run: |
+        set -euo pipefail
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$RECEIPTS" guard --stage review2
         python3 "$RECEIPTS" resume review2
     - name: Checkout board sync
@@ -861,6 +891,8 @@ jobs:
       run: |
         set -euo pipefail
         : "${STANDING_RULINGS:?Standing rulings missing; refusing to run without laws}"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" prepare --repo "$R" --pr "$PR" --issue "$ISSUE" --checkout "$W" --base "$BASE_SHA" --state "$REVIEW_STATE" --pipeline-stage review2
     - name: Classify selected review diff
       id: tier
@@ -872,6 +904,8 @@ jobs:
       run: |
         set -euo pipefail
         cd "$W"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_TIER" --base "$DIFF_BASE" --head "$REVIEW_HEAD" --repo "$R"
     - name: Scoped re-review
       id: review
@@ -888,6 +922,8 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: Retry budget-exceeded review once
       if: steps.review.outputs.budget_retry == 'true'
@@ -902,6 +938,8 @@ jobs:
         set -euo pipefail
         export PATH="$HOME/.local/bin:$HOME/.local/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
         jq -e '.retryable == true and .reason == "budget-exceeded"' "$REVIEW_STATE/result.json"
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
         python3 "$REVIEW_RUN" run --state "$REVIEW_STATE" --tier "$TIER" --model "$MODEL" --effort "$EFFORT" --minutes "$MINUTES"
     - name: General Info
       id: gi
@@ -954,9 +992,11 @@ jobs:
         R: "${{ github.repository }}"
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
         PR: "${{ needs.build.outputs.pr }}"
-      run: 'python3 "$RECEIPTS" record review2
-
-'
+      run: |
+        set -euo pipefail
+        printf '%s  %s\n' "$REVIEW_MANIFEST_SHA256" "$REVIEW_MANIFEST" | shasum -a 256 -c -
+        (cd "$(dirname "$REVIEW_MANIFEST")" && shasum -a 256 -c SHA256SUMS)
+        python3 "$RECEIPTS" record review2
   qa:
     name: QA
     needs:
