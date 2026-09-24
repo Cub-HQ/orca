@@ -77,18 +77,15 @@ def stalled(job, runners, now):
 def block_board(repo, issue, url, reason):
     import board_sync
     for project in board_sync.projects_for(repo):
-        try:
-            board_sync.sync_project(project, issue, "Blocked", url)
-            fields = board_sync.project_fields(project)
-            why = fields.get("Why Awaiting Human")
-            if why:
-                root = f"users/{board_sync.OWNER}/projectsV2/{project}"
-                item = next(i for i in board_sync.pages(root + "/items?per_page=100")
-                            if (i.get("content") or {}).get("url") == issue["url"])
-                board_sync.api(f"{root}/items/{item['id']}", "PATCH",
-                               {"fields": [{"id": why["id"], "value": reason}]})
-        except Exception as exc:
-            print(f"runner-watch board update unavailable: {exc}", file=sys.stderr)
+        board_sync.sync_project(project, issue, "Blocked", url)
+        fields = board_sync.project_fields(project)
+        why = fields.get("Why Awaiting Human")
+        if why:
+            root = board_sync.project_path(project)
+            item = next(i for i in board_sync.pages(root + "/items?per_page=100")
+                        if (i.get("content") or {}).get("url") == issue["url"])
+            board_sync.api(f"{root}/items/{item['id']}", "PATCH",
+                           {"fields": [{"id": why["id"], "value": reason}]})
 
 
 def watch(repo, api=gh, board=block_board, now=None):
@@ -274,7 +271,7 @@ def self_test():
     import types
     board_calls = []
     stub = types.SimpleNamespace(
-        OWNER="Cubatica", projects_for=lambda repo: (4,),
+        OWNER="Cubatica", projects_for=lambda repo: (4,), project_path=lambda project: f"users/Cubatica/projectsV2/{project}",
         sync_project=lambda *args: board_calls.append(args),
         project_fields=lambda project: {"Why Awaiting Human": {"id": 42}},
         pages=lambda path: [{"id": 90, "content": {"url": "issue-url"}}],

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Set Stage + Run on the Cubatica project boards for one issue."""
+"""Set Stage + Run on the personal and organization factory boards for one issue."""
 import argparse, functools, json, re, subprocess, sys, time
 from datetime import datetime, timezone
 
-PROJECTS = (3, 4)  # users/Cubatica projects: Fitness Coach Factory, All Projects
-OWNER = "Cubatica"
+ORG_PROJECTS = ("orgs/Cub-HQ/projectsV2/1", "orgs/Cub-HQ/projectsV2/2")
 
 
 def projects_for(repo):
-    return PROJECTS if repo == "Cub-HQ/fitness-coach" else (4,)
+    return (3, ORG_PROJECTS[0], 4, ORG_PROJECTS[1]) if repo == "Cub-HQ/fitness-coach" else (4, ORG_PROJECTS[1])
+
+def project_path(project):
+    return project if isinstance(project, str) else f"users/Cubatica/projectsV2/{project}"
 
 
 # Pipeline job milestones, not board columns; mirror this repo's df-pipeline.yml.
@@ -19,6 +21,7 @@ STEPS_DONE = {"Queued": 0, "Shipped": TOTAL}
 STEPS_DONE.update({stage: PIPELINE_STAGES.index(job) + 1 for stage, job in {
     "Triage": "Intake", "Building": "Build", "In review": "Review", "QA": "QA",
     "Deploying": "Merge"}.items()})
+
 
 
 def api(path, method="GET", body=None):
@@ -41,6 +44,33 @@ def api(path, method="GET", body=None):
             continue
         raise RuntimeError(f"{method} {path}: {r.stderr[:500] or payload[:500]}")
 
+def graphql(query, variables):
+    r = subprocess.run(["gh", "api", "graphql", "--input", "-"],
+                       input=json.dumps({"query": query, "variables": variables}),
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(f"GraphQL: {r.stderr[:500] or r.stdout[:500]}")
+    result = json.loads(r.stdout)
+    if result.get("errors"):
+        raise RuntimeError(f"GraphQL: {result['errors']}")
+    return result["data"]
+
+
+@functools.cache
+def project_id(project):
+    value, _ = api(project_path(project))
+    return value["node_id"]
+
+
+def add_item(project, issue):
+    content_id = issue.get("node_id")
+    if not content_id:
+        raise RuntimeError(f"#{issue.get('number')} has no GraphQL node id")
+    data = graphql("""mutation($project: ID!, $content: ID!) {
+      addProjectV2ItemById(input: {projectId: $project, contentId: $content}) { item { databaseId } }
+    }""", {"project": project_id(project), "content": content_id})
+    return {"id": data["addProjectV2ItemById"]["item"]["databaseId"], "fields": []}
+
 
 def pages(path):
     while path:
@@ -49,15 +79,14 @@ def pages(path):
 
 
 @functools.cache
-def project_fields(number):
-    return {f["name"]: f for f in pages(
-        f"users/{OWNER}/projectsV2/{number}/fields?per_page=30")}
+def project_fields(project):
+    return {f["name"]: f for f in pages(f"{project_path(project)}/fields?per_page=30")}
 
 
-def update_item(number, item_id, stage_name=None, run_url="", clear_why=False, running_for=None, shipped_at=None):
+def update_item(project, item_id, stage_name=None, run_url="", clear_why=False, running_for=None, shipped_at=None):
     """Update an existing item without querying or adding any board items."""
-    path = f"users/{OWNER}/projectsV2/{number}"
-    fields = project_fields(number)
+    path = project_path(project)
+    fields = project_fields(project)
     stage = fields.get("Workflow Stage")
     opt = next((o["id"] for o in (stage or {}).get("options", [])
                 if o["name"]["raw"] == stage_name), None)
@@ -106,21 +135,50 @@ def first_ship_date(issue, existing=None):
     return (closed or datetime.now(timezone.utc).isoformat())[:10]
 
 
-def sync_project(number, issue, stage_name, run_url):
-    path = f"users/{OWNER}/projectsV2/{number}"
-    date_field = project_fields(number).get("Shipped At")
+def sync_project(project, issue, stage_name, run_url, known_missing=False):
+    path = project_path(project)
+    date_field = project_fields(project).get("Shipped At")
     selected = f"&fields={date_field['id']}" if date_field else ""
-    item = next((i for i in pages(f"{path}/items?per_page=100{selected}")
-                 if (i.get("content") or {}).get("url") == issue["url"]), None)
+    item = None if known_missing else next((
+        item for item in pages(f"{path}/items?per_page=100{selected}")
+        if (item.get("content") or {}).get("url") == issue["url"]), None)
     if item is None:
-        item, _ = api(f"{path}/items", "POST", {"type": "Issue", "id": issue["id"]})
+        item = add_item(project, issue)
     existing = next((field.get("value") for field in item.get("fields", [])
                      if field["name"] == "Shipped At"), None)
     date = first_ship_date(issue, existing) if stage_name == "Shipped" and date_field else None
-    update_item(number, item["id"], stage_name, run_url, shipped_at=date)
+    update_item(project, item["id"], stage_name, run_url, shipped_at=date)
+
+
+def self_test():
+    calls = []
+    original_project_id, original_graphql = project_id, graphql
+    try:
+        globals()["project_id"] = lambda project: "PVT_project"
+        globals()["graphql"] = lambda query, variables: (
+            calls.append((query, variables)) or
+            {"addProjectV2ItemById": {"item": {"databaseId": 90}}})
+        item = add_item(4, {"number": 45, "node_id": "I_issue"})
+        assert item["id"] == 90
+        assert calls[0][1] == {"project": "PVT_project", "content": "I_issue"}
+        try:
+            add_item(4, {"number": 46})
+        except RuntimeError as exc:
+            assert str(exc) == "#46 has no GraphQL node id"
+        else:
+            raise AssertionError("missing node id did not fail")
+        assert projects_for("Cub-HQ/fitness-coach") == (
+            3, "orgs/Cub-HQ/projectsV2/1", 4, "orgs/Cub-HQ/projectsV2/2")
+        assert projects_for("Cub-HQ/orca") == (4, "orgs/Cub-HQ/projectsV2/2")
+    finally:
+        globals()["project_id"], globals()["graphql"] = original_project_id, original_graphql
+    print("board-sync self-test: PASS (node ID add, missing ID failure, four-board routing)")
 
 
 def main():
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        return
     p = argparse.ArgumentParser()
     p.add_argument("--repo", required=True)
     p.add_argument("--issue", required=True, type=int)
@@ -134,16 +192,10 @@ def main():
         print(f"board: #{a.issue} closed; ignoring stage {a.stage}")
         return
 
-    for number in projects_for(a.repo):
-        try:
-            sync_project(number, issue, a.stage, a.run_url)
-            print(f"board: project {number} #{a.issue} -> {a.stage}")
-        except Exception as exc:  # one board must not prevent the other from syncing
-            print(f"board sync skipped: project {number}: {exc}", file=sys.stderr)
+    for path in projects_for(a.repo):
+        sync_project(path, issue, a.stage, a.run_url)
+        print(f"board: {path} #{a.issue} -> {a.stage}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as exc:  # board sync must never fail the pipeline
-        print(f"board sync skipped: {exc}", file=sys.stderr)
+    main()

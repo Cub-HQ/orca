@@ -1,4 +1,30 @@
 {
+  "tools/board_sync.py": [
+    [
+      "python3",
+      "tools/board_sync.py",
+      "--self-test"
+    ]
+  ],
+  "tools/factory_sweep.py": [
+    [
+      "python3",
+      "tools/factory_sweep.py",
+      "--self-test"
+    ]
+  ],
+  "tools/test_factory_sweep.py": [
+    [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tools",
+      "-p",
+      "test_factory_sweep.py"
+    ]
+  ],
   "tools/factory_merge_gate.py": [
     [
       "python3",

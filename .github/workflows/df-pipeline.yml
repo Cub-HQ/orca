@@ -81,7 +81,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to Triage
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -308,7 +307,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to Building
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -449,7 +447,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to In review
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -607,7 +604,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to Building
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -750,7 +746,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to In review
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -918,7 +913,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to QA
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -1066,7 +1060,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to Deploying
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -1215,7 +1208,6 @@ jobs:
         persist-credentials: false
       if: steps.resume.outputs.skip != 'true'
     - name: Set board stage to Deploying
-      continue-on-error: true
       working-directory: board-stage
       env:
         ISSUE: "${{ github.event.issue.number || inputs.issue }}"
@@ -1391,7 +1383,8 @@ jobs:
           triage "the pipeline did not finish (review1=$V1 review2=$V2 qa=$QA merge=$SHIP deploy=${DEP:-} acceptance=${ACC:-})"
         fi
         echo "DF_ROUTE=$ROUTE" >> "$GITHUB_ENV"
-        gh api "repos/$R/contents/tools/board_sync.py" --jq .content | base64 -d > "$RUNNER_TEMP/board_sync.py" && python3 "$RUNNER_TEMP/board_sync.py" --repo "$R" --issue "$ISSUE" --stage "$STG" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID" || true
+        gh api "repos/$R/contents/tools/board_sync.py" --jq .content | base64 -d > "$RUNNER_TEMP/board_sync.py"
+        python3 "$RUNNER_TEMP/board_sync.py" --repo "$R" --issue "$ISSUE" --stage "$STG" --run-url "https://github.com/$R/actions/runs/$GITHUB_RUN_ID"
     - name: For Josh
       if: always()
       env:
