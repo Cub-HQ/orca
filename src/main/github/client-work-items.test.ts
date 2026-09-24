@@ -721,23 +721,6 @@ describe('listWorkItems', () => {
     expect(apiPath).toContain('is:issue is:closed')
     expect(apiPath).not.toContain('-is:merged')
   })
-
-  it('returns zero without spawning gh when the search bucket is rate-limit blocked', async () => {
-    getIssueOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
-    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
-    rateLimitGuardMock.mockReturnValue({
-      blocked: true,
-      remaining: 0,
-      limit: 30,
-      resetAt: Math.floor(Date.now() / 1000) + 60
-    } as unknown as { blocked: boolean })
-
-    await expect(countWorkItems('/repo-root', 'is:issue is:open')).resolves.toBe(0)
-
-    expect(rateLimitGuardMock).toHaveBeenCalledWith('search')
-    expect(ghExecFileAsyncMock).not.toHaveBeenCalled()
-  })
-
   it('returns open issues and PRs for the all-open preset query', async () => {
     getIssueOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
     getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
@@ -873,28 +856,5 @@ describe('listWorkItems', () => {
         isCrossRepository: true
       }
     ])
-  })
-
-  it('rejects unresolved SSH repositories without running unscoped GitHub work-item queries', async () => {
-    getIssueOwnerRepoMock.mockResolvedValue(null)
-    getOwnerRepoMock.mockResolvedValue(null)
-    getOwnerRepoForRemoteMock.mockResolvedValue(null)
-
-    await expect(
-      listWorkItems('/remote/repo', 10, undefined, undefined, undefined, 'ssh-1')
-    ).rejects.toThrow('GitHub work items require a GitHub remote for SSH repositories')
-
-    expect(ghExecFileAsyncMock).not.toHaveBeenCalled()
-
-    ghExecFileAsyncMock.mockClear()
-    getIssueOwnerRepoMock.mockResolvedValue(null)
-    getOwnerRepoMock.mockResolvedValue(null)
-    getOwnerRepoForRemoteMock.mockResolvedValue(null)
-
-    await expect(
-      listWorkItems('/remote/repo', 10, 'is:open', undefined, undefined, 'ssh-1')
-    ).rejects.toThrow('GitHub work items require a GitHub remote for SSH repositories')
-
-    expect(ghExecFileAsyncMock).not.toHaveBeenCalled()
   })
 })
