@@ -42,6 +42,11 @@ def producer_proof(body):
 
 
 def api(path, method='GET', data=None, pages=False, timeout=None, env=None):
+    # Job-token reads avoid the shared App quota; writes retain the App identity.
+    repo = os.environ.get('GITHUB_REPOSITORY', '')
+    if (env is None and method == 'GET' and os.environ.get('READ_TOKEN')
+            and repo and path.startswith(f'repos/{repo}/')):
+        env = dict(os.environ, GH_TOKEN=os.environ['READ_TOKEN'])
     cmd = ['gh', 'api', path, '-X', method]
     if pages:
         cmd += ['--paginate', '--slurp']
