@@ -1,6 +1,18 @@
 # Opens a draft PR when a branch is pushed, so a created PR never depends on the
-# connector's create_pull_request tool. Logic lives in the shared reusable
-# workflow; this file is only the trigger. Opt out per commit with [no-pr].
+# connector's create_pull_request tool. Opt out per commit with [no-pr].
+#
+# SELF-CONTAINED COPY. Every private Cub-HQ repo uses the thin caller for the
+# shared reusable workflow in Cub-HQ/build-team-ops. This repo is PUBLIC, and a
+# public repo cannot call a reusable workflow from a private repo, so the logic
+# is duplicated here. If you change the logic, change it in
+# Cub-HQ/build-team-ops/.github/workflows/auto-draft-pr-reusable.yml too.
+#
+# Background: on 2026-10-10 the connector pushed branch + commit successfully,
+# then both github_create_pull_request calls returned "user cancelled MCP tool
+# call" with isError=true. Nobody cancelled. The call never reached GitHub and
+# the connector held pull_requests: write throughout, so the abort was cloud-side
+# in the approval flow. Branch push is the step that provably works, so the PR is
+# created from the push instead.
 name: Auto draft PR
 
 on:
@@ -19,4 +31,76 @@ concurrency:
 
 jobs:
   open-draft-pr:
-    uses: Cub-HQ/build-team-ops/.github/workflows/auto-draft-pr-reusable.yml@main
+    # GitHub-hosted: free on public repos, and keeps our self-hosted runners out
+    # of reach of a public repo's workflows.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const p = context.payload;
+            const draft = true;
+
+            if (p.deleted) {
+              core.info('Branch deleted, nothing to do.');
+              return;
+            }
+
+            const branch = (p.ref || '').replace('refs/heads/', '');
+            // Read the base from the repo, so main/master both work with no config.
+            const base = p.repository.default_branch;
+            if (!branch || branch === base) {
+              core.info(`Skipping branch "${branch}".`);
+              return;
+            }
+
+            const fullMsg = (p.head_commit && p.head_commit.message) || '';
+            if (/\[no-pr\]/i.test(fullMsg)) {
+              core.info('Commit message contains [no-pr], skipping.');
+              return;
+            }
+
+            // Never open a second PR for a branch that already has one, in any
+            // state. A closed PR means someone decided against it.
+            const existing = await github.rest.pulls.list({
+              owner, repo, head: `${owner}:${branch}`, state: 'all', per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              core.info(`PR already exists: ${existing.data[0].html_url}`);
+              return;
+            }
+
+            // An empty branch has nothing to review.
+            const cmp = await github.rest.repos.compareCommits({
+              owner, repo, base, head: branch,
+            });
+            if (cmp.data.ahead_by === 0) {
+              core.info(`Branch is not ahead of ${base}, skipping.`);
+              return;
+            }
+
+            const subject = fullMsg.split('\n')[0].trim();
+            const title = subject || `Changes from ${branch}`;
+
+            const pr = await github.rest.pulls.create({
+              owner, repo, title, head: branch, base, draft,
+              body: [
+                `Draft PR opened automatically from the push to \`${branch}\`.`,
+                '',
+                `Commits: ${cmp.data.ahead_by}. Review, fill in the description, then mark ready.`,
+                '',
+                'Opened by the shared `Auto draft PR` workflow',
+                '(self-contained copy: this repo is public and cannot call the private reusable one)',
+                'because the connector `create_pull_request` tool is unreliable.',
+                'Use `[no-pr]` in a commit message to skip this.',
+              ].join('\n'),
+            });
+
+            core.info(`Opened ${pr.data.html_url}`);
+            await core.summary
+              .addHeading('Draft PR opened')
+              .addLink(pr.data.html_url, pr.data.html_url)
+              .write();
