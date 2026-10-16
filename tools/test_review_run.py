@@ -103,8 +103,10 @@ class RuntimeManifest(unittest.TestCase):
                     return receipts
                 return {}
             args = SimpleNamespace(repo='owner/repo', pr=1, checkout=str(root), base=head, issue=None, pipeline_stage=None)
+            laws = root / 'rulings.md'
+            laws.write_text('Standing laws')
             for receipts in ([bot, attacker], [bot, forged]):
-                with patch.object(module, 'RUNNER_VERSION', version), patch.object(module, 'FEEDBACK_PREFIX', ('reset',)), patch.object(module, 'api', api), patch.object(module, 'git', return_value=head), patch.object(module.subprocess, 'check_output', side_effect=[b'diff', 'diff']):
+                with patch.dict(os.environ, STANDING_RULINGS_FILE=str(laws)), patch.object(module, 'RUNNER_VERSION', version), patch.object(module, 'FEEDBACK_PREFIX', ('reset',)), patch.object(module, 'api', api), patch.object(module, 'git', return_value=head), patch.object(module.subprocess, 'check_output', side_effect=[b'diff', 'diff']):
                     module.prepare(args, state)
                 self.assertEqual(json.loads((state / 'state.json').read_text())['budget_failures'], 1)
 
@@ -182,6 +184,9 @@ class ReviewCLI(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                         FAKE_DATA=str(self.data), FAKE_POSTS=str(self.posts),
                         PI_CODING_AGENT_DIR=str(agent), RUNNER_VERSION="a" * 40 + ":" + "b" * 64)
+        self.laws = self.root / 'rulings.md'
+        self.laws.write_text('Standing laws', encoding='utf-8')
+        self.env['STANDING_RULINGS_FILE'] = str(self.laws)
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'BOARD_TOKEN', 'APP_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_ASKPASS'):
             self.env[key] = 'sensitive-must-not-reach-reviewer'
         self.env['GIT_CONFIG_COUNT'] = '0'
@@ -302,11 +307,12 @@ class ReviewCLI(unittest.TestCase):
         self.assertFalse((self.state / 'review.jsonl').exists())
 
     def test_workflow_rulings_reach_reviewer_brief(self):
-        self.env['STANDING_RULINGS'] = 'Never publish private athlete data.'
+        laws = 'Never publish private athlete data.\n' + '守則🛡️' * 40000
+        self.laws.write_text(laws, encoding='utf-8')
         self.prepare()
-        self.env.pop('STANDING_RULINGS')
+        self.env.pop('STANDING_RULINGS_FILE')
         self.cli('run', '--tier', 'c', '--model', 'oauth-pool/claude-opus-5', '--effort', 'high', '--minutes', '15')
-        self.assertIn('Trusted standing rulings from the workflow:\nNever publish private athlete data.',
+        self.assertIn('Trusted standing rulings from the workflow:\n' + laws,
                       (self.state / 'run-brief.txt').read_text())
 
     def test_retryable_approval_never_reuses(self):

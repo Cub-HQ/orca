@@ -1,4 +1,5 @@
 {
+  "tools/test_standing_rulings.py": [["python3", "tools/test_standing_rulings.py"]],
   "tools/review_tier": [
     [
       "python3",
